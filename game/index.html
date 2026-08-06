@@ -75,11 +75,23 @@ const W = canvas.width, H = canvas.height;
 const GRAVITY = 0.62;
 const GROUND_FRICTION = 0.82;
 
-// ---------- Asset loading ----------
-const bgImg = new Image();
-bgImg.src = 'assets/level1-bg.jpg';
-let bgReady = false;
-bgImg.onload = () => { bgReady = true; };
+// ---------- Background (hand-drawn to match the dragon's flat cartoon style) ----------
+// Star positions are seeded once and tiled with parallax, rather than the raw
+// photo the level used to show behind the vector-drawn dragon and platforms.
+const STAR_TILE = 900;
+const stars = [];
+for (let i = 0; i < 46; i++) {
+  stars.push({
+    x: Math.random() * STAR_TILE,
+    y: Math.random() * H * 0.6,
+    r: 0.6 + Math.random() * 1.5,
+    phase: Math.random() * Math.PI * 2
+  });
+}
+// Deterministic rolling silhouette (sum of a few sine waves) - no stored points needed.
+function hillHeight(worldX) {
+  return 26 * Math.sin(worldX * 0.006) + 14 * Math.sin(worldX * 0.017 + 1.5) + 8 * Math.sin(worldX * 0.041 + 0.6);
+}
 
 // ---------- Input ----------
 const keys = {};
@@ -233,9 +245,13 @@ function spawnLevel1Enemies() {
   ];
 }
 function makeBombBot(x, groundY) {
+  // Patrol range is clamped to the platform it spawns on, so it turns around at the
+  // edge instead of walking straight out over a gap.
+  const home = platforms.find(p => x >= p.x && x <= p.x + p.w) || {x:0, w:LEVEL_WIDTH};
   return {
     type:'bomb', x, y:groundY-40, w:38, h:40, vx:0, vy:0,
     hp:80, maxHp:80, dmg:8, speed:0.55, dir: -1,
+    homeMinX: home.x, homeMaxX: home.x + home.w - 38,
     onGround:true, hitFlash:0, exploding:false, explodeTimer:0,
     attackCooldown:0, telegraph:false, attackWindup:0, dead:false, groundY
   };
@@ -514,7 +530,9 @@ function updateEnemies() {
           en.dir *= -1;
         }
         en.x += en.dir * en.speed;
-        en.x = Math.max(0, Math.min(LEVEL_WIDTH - en.w, en.x));
+        // stay on its own platform - turn around at the edge instead of walking over a gap
+        if (en.x <= en.homeMinX) { en.x = en.homeMinX; en.dir = 1; }
+        if (en.x >= en.homeMaxX) { en.x = en.homeMaxX; en.dir = -1; }
       }
       en.y = en.groundY - en.h;
 
@@ -628,29 +646,67 @@ function drawDragon(p) {
 
   if (p.invuln > 0 && Math.floor(frame/4)%2===0) ctx.globalAlpha = 0.4;
 
-  // tail
-  ctx.fillStyle = '#3fae4a';
+  // tail with a small spiked tip
+  ctx.fillStyle = '#379143';
   ctx.beginPath();
   ctx.moveTo(-p.w/2, 6);
-  ctx.quadraticCurveTo(-p.w/2-16, 12, -p.w/2-22, -2);
-  ctx.quadraticCurveTo(-p.w/2-10, 2, -p.w/2, -4);
+  ctx.quadraticCurveTo(-p.w/2-18, 11, -p.w/2-27, -2);
+  ctx.quadraticCurveTo(-p.w/2-12, 3, -p.w/2, -4);
+  ctx.fill();
+  ctx.fillStyle = '#e8d55a';
+  ctx.beginPath();
+  ctx.moveTo(-p.w/2-23, -3);
+  ctx.lineTo(-p.w/2-31, -7);
+  ctx.lineTo(-p.w/2-21, 3);
   ctx.fill();
 
-  // body
-  ctx.fillStyle = '#4CC15A';
+  // body - subtle gradient so it reads with some volume instead of a flat fill
+  const bodyGrad = ctx.createLinearGradient(-p.w/2, -p.h/2, p.w/2, p.h/2);
+  bodyGrad.addColorStop(0, '#5fd66c');
+  bodyGrad.addColorStop(1, '#379143');
+  ctx.fillStyle = bodyGrad;
   roundRect(ctx, -p.w/2+4, -p.h/2+14, p.w-8, p.h-22, 10);
   ctx.fill();
+
+  // spine spikes
+  ctx.fillStyle = '#e8d55a';
+  for (const sx of [-p.w/2+7, -p.w/2+15, -p.w/2+23]) {
+    ctx.beginPath();
+    ctx.moveTo(sx-3, -p.h/2+16);
+    ctx.lineTo(sx+3, -p.h/2+16);
+    ctx.lineTo(sx, -p.h/2+7);
+    ctx.fill();
+  }
 
   // belly
   ctx.fillStyle = '#eaf7cf';
   roundRect(ctx, -p.w/2+9, -p.h/2+22, p.w-20, p.h-32, 7);
   ctx.fill();
 
-  // legs
-  ctx.fillStyle = '#3fae4a';
+  // legs with small claws
+  ctx.fillStyle = '#379143';
   const legSwing = p.onGround ? Math.sin(p.walkCycle)*6 : 0;
   ctx.fillRect(-10, p.h/2-18+legSwing*0.2, 8, 16);
   ctx.fillRect(4, p.h/2-18-legSwing*0.2, 8, 16);
+  ctx.fillStyle = '#e8d55a';
+  ctx.beginPath();
+  ctx.moveTo(-11, p.h/2-2+legSwing*0.2); ctx.lineTo(-5, p.h/2-2+legSwing*0.2); ctx.lineTo(-8, p.h/2+3+legSwing*0.2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(3, p.h/2-2-legSwing*0.2); ctx.lineTo(9, p.h/2-2-legSwing*0.2); ctx.lineTo(6, p.h/2+3-legSwing*0.2);
+  ctx.fill();
+
+  // small arm connecting shoulder to the weapon grip, plus a pauldron colored to the equipped weapon
+  ctx.fillStyle = '#379143';
+  roundRect(ctx, p.w/2-15, -3, 13, 6, 3);
+  ctx.fill();
+  ctx.fillStyle = p.weapon.color;
+  ctx.beginPath();
+  ctx.arc(p.w/2-17, -p.h/2+23, 6, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
   // head
   ctx.fillStyle = '#4CC15A';
@@ -658,20 +714,31 @@ function drawDragon(p) {
   ctx.ellipse(p.w/2-14, -p.h/2+16, 15, 13, 0, 0, Math.PI*2);
   ctx.fill();
   // snout
-  ctx.fillStyle = '#4CC15A';
-  roundRect(ctx, p.w/2-8, -p.h/2+12, 14, 10, 4);
+  roundRect(ctx, p.w/2-9, -p.h/2+11, 16, 10, 4);
   ctx.fill();
-  // horn
+  // brow ridge for a sharper, more determined look
+  ctx.fillStyle = '#2f7a3a';
+  ctx.beginPath();
+  ctx.moveTo(p.w/2-20, -p.h/2+7);
+  ctx.lineTo(p.w/2-5, -p.h/2+5);
+  ctx.lineTo(p.w/2-7, -p.h/2+9);
+  ctx.lineTo(p.w/2-20, -p.h/2+10);
+  ctx.fill();
+  // swept-back horn
   ctx.fillStyle = '#e8d55a';
   ctx.beginPath();
-  ctx.moveTo(p.w/2-4, -p.h/2+4);
-  ctx.lineTo(p.w/2+6, -p.h/2-6);
-  ctx.lineTo(p.w/2, -p.h/2+6);
+  ctx.moveTo(p.w/2-5, -p.h/2+4);
+  ctx.quadraticCurveTo(p.w/2+10, -p.h/2-4, p.w/2+9, -p.h/2-12);
+  ctx.quadraticCurveTo(p.w/2+2, -p.h/2-2, p.w/2-1, -p.h/2+5);
   ctx.fill();
-  // eye
+  // eye with a highlight for some life in the expression
   ctx.fillStyle = '#20321f';
   ctx.beginPath();
-  ctx.arc(p.w/2-10, -p.h/2+14, 2, 0, Math.PI*2);
+  ctx.arc(p.w/2-10, -p.h/2+15, 2.2, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(p.w/2-10.8, -p.h/2+14.2, 0.8, 0, Math.PI*2);
   ctx.fill();
 
   ctx.globalAlpha = 1;
@@ -918,33 +985,76 @@ function drawParticles() {
   ctx.globalAlpha = 1;
 }
 
-function drawBackground() {
-  if (bgReady) {
-    // parallax: background scrolls slower than camera
-    const parX = -camera.x * 0.35;
-    const bw = bgImg.width, bh = bgImg.height;
-    const scale = H / bh * 1.15;
-    const dw = bw * scale, dh = bh * scale;
-    let startX = (parX % dw) - dw;
-    let tileIndex = Math.round((startX - parX % dw) / dw);
-    for (let x = startX; x < W + dw; x += dw, tileIndex++) {
-      if (tileIndex % 2 === 0) {
-        ctx.drawImage(bgImg, x, (H-dh)/2, dw, dh);
-      } else {
-        // mirror alternate tiles so the repeat edge lines up instead of showing a hard seam
-        ctx.save();
-        ctx.translate(x + dw, (H-dh)/2);
-        ctx.scale(-1, 1);
-        ctx.drawImage(bgImg, 0, 0, dw, dh);
-        ctx.restore();
-      }
-    }
-    ctx.fillStyle = 'rgba(10,8,20,0.18)';
-    ctx.fillRect(0,0,W,H);
-  } else {
-    ctx.fillStyle = '#141428';
-    ctx.fillRect(0,0,W,H);
+function drawMoon(cx, cy) {
+  const R = 150;
+  ctx.fillStyle = 'rgba(244,206,120,0.30)';
+  ctx.beginPath(); ctx.arc(cx, cy, R*1.42, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(230,150,90,0.40)';
+  ctx.beginPath(); ctx.arc(cx, cy, R*1.22, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(96,140,205,0.42)';
+  ctx.beginPath(); ctx.arc(cx, cy, R*1.06, 0, Math.PI*2); ctx.fill();
+  // flat-shaded moon body (a touch of gradient, same restrained style as the dragon's belly panel)
+  const body = ctx.createRadialGradient(cx-R*0.3, cy-R*0.3, R*0.2, cx, cy, R);
+  body.addColorStop(0, '#c97a5c');
+  body.addColorStop(1, '#a3573d');
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  const craters = [[-0.32,-0.22,0.22],[0.26,-0.12,0.15],[-0.08,0.32,0.16],[0.36,0.3,0.1],[0.02,-0.02,0.09]];
+  for (const [ox,oy,r] of craters) {
+    ctx.beginPath(); ctx.arc(cx+ox*R, cy+oy*R, r*R, 0, Math.PI*2); ctx.fill();
   }
+}
+
+function drawBackground() {
+  // sky gradient - same dusk palette the drawing used, as a flat vector wash
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#2c2050');
+  sky.addColorStop(0.5, '#553a72');
+  sky.addColorStop(1, '#caa2c4');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // stars: slow parallax, gentle twinkle
+  const starParX = -camera.x * 0.15;
+  for (let tile = -1; tile <= Math.ceil(W / STAR_TILE) + 1; tile++) {
+    const baseX = (((starParX % STAR_TILE) + STAR_TILE) % STAR_TILE) + tile * STAR_TILE - STAR_TILE;
+    for (const s of stars) {
+      const tw = 0.5 + 0.5 * Math.sin(frame * 0.05 + s.phase);
+      ctx.globalAlpha = 0.25 + 0.55 * tw;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(baseX + s.x, s.y, s.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // one big moon per "phase" of the level, drifting slowly behind the action.
+  // World position of moon i is i*moonTile + moonOffset; screen position subtracts
+  // the parallax-scaled camera so it scrolls slower than the foreground.
+  const moonTile = 3000, moonOffset = 460, moonGlow = 213;
+  const moonParX = camera.x * 0.35;
+  const iMin = Math.floor((moonParX - moonGlow - moonOffset) / moonTile);
+  const iMax = Math.ceil((moonParX + W + moonGlow - moonOffset) / moonTile);
+  for (let i = iMin; i <= iMax; i++) {
+    drawMoon(i * moonTile + moonOffset - moonParX, H * 0.32);
+  }
+
+  // rolling silhouette hills for a mid-ground layer, same flat-color language as the platforms
+  const hillParX = camera.x * 0.55;
+  ctx.fillStyle = '#3c2b57';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let x = 0; x <= W; x += 20) {
+    ctx.lineTo(x, H * 0.72 + hillHeight(x + hillParX));
+  }
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(12,8,22,0.16)';
+  ctx.fillRect(0, 0, W, H);
 }
 
 // ---------- Main update / render ----------
