@@ -269,8 +269,20 @@ const WEAPONS = {
   bow: {
     name: '弓', key:'bow', price: 42,
     dmg: 10, cooldown: 24, staminaCost: 8, range: 0, windup: 6, color:'#8a6a3a',
-    desc: '遠程攻擊，安全距離輸出', speedRating: 2, dmgRating: 1,
-    specialName: '三重箭', specialCost: 24, specialCooldown: 110, ranged: true
+    desc: '朝滑鼠/觸點方向遠程射擊', speedRating: 2, dmgRating: 1,
+    specialName: '狙擊', specialCost: 26, specialCooldown: 130, ranged: true
+  },
+  flail: {
+    name: '連枷', key:'flail', price: 40,
+    dmg: 18, cooldown: 34, staminaCost: 16, range: 64, windup: 10, color:'#6a5a4a',
+    desc: '攻擊中等，範圍不錯', speedRating: 2, dmgRating: 2,
+    specialName: '旋風連擊', specialCost: 28, specialCooldown: 120
+  },
+  scythe: {
+    name: '鐮刀', key:'scythe', price: 50,
+    dmg: 20, cooldown: 36, staminaCost: 18, range: 66, windup: 9, color:'#8a1a2a',
+    desc: '攻擊中等，範圍廣', speedRating: 2, dmgRating: 2,
+    specialName: '死神橫掃', specialCost: 30, specialCooldown: 130
   }
 };
 const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the special instead of a tap
@@ -292,9 +304,17 @@ const SHIELDS = {
   spikeshield: {
     name: '尖刺盾', key:'spikeshield', price: 45,
     desc: '格擋減傷 80%，格擋中被擊會反傷附近敵人', blockReduction: 0.2, locksMovement: false, thorns: true
+  },
+  buckler: {
+    name: '輕盾', key:'buckler', price: 30,
+    desc: '格擋減傷較低 (60%)，但格擋時仍可全速移動', blockReduction: 0.4, locksMovement: false, thorns: false, fastBlock: true
+  },
+  manashield: {
+    name: '魔法盾', key:'manashield', price: 55,
+    desc: '格擋減傷 80%，消耗的是 FP 而非耐力', blockReduction: 0.2, locksMovement: false, thorns: false, manaCost: true
   }
 };
-const PURCHASABLE_SHIELD_KEYS = ['none', 'greatshield', 'spikeshield'];
+const PURCHASABLE_SHIELD_KEYS = ['none', 'greatshield', 'spikeshield', 'buckler', 'manashield'];
 let selectedWeapon = 'sword';
 let levelTimeLeft = 130 * 60; // frames (~130s at 60fps)
 let frame = 0;
@@ -401,7 +421,7 @@ const SHOP_ITEMS = [
 // Same purchase system, split across the two physical shop buildings in the village.
 const WEAPON_SHOP_UPGRADE_ITEMS = SHOP_ITEMS.filter(i => i.id === 'weapon');
 const ARMOR_SHOP_ITEMS = SHOP_ITEMS.filter(i => i.id !== 'weapon');
-const PURCHASABLE_WEAPON_KEYS = ['sword', 'hammer', 'spear', 'dualdagger', 'greataxe', 'whip', 'greatsword', 'trident', 'katana', 'shortblade', 'bow'];
+const PURCHASABLE_WEAPON_KEYS = ['sword', 'hammer', 'spear', 'dualdagger', 'greataxe', 'whip', 'greatsword', 'trident', 'katana', 'shortblade', 'bow', 'flail', 'scythe'];
 function selectOrBuyWeapon(key) {
   const w = WEAPONS[key];
   if (!w) return;
@@ -499,11 +519,11 @@ const LEVEL_DEFS = {
     theme: { sky1:'#2c2050', sky2:'#553a72', sky3:'#caa2c4', hill:'#3c2b57', focal:'moon' },
     makeEnemies: () => [
       makeGroundEnemy(700, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
-      makeFlyingEnemy(1050, GROUND_Y-220, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
       makeGroundEnemy(1620, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
-      makeFlyingEnemy(1950, GROUND_Y-200, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
+      makeFlyingEnemy(1950, GROUND_Y-130, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
       makeGroundEnemy(2260, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
-      makeFlyingEnemy(2500, GROUND_Y-180, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' })
+      makeFlyingEnemy(2500, GROUND_Y-110, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' })
     ]
   },
   volcano: {
@@ -512,9 +532,9 @@ const LEVEL_DEFS = {
     theme: { sky1:'#3a1408', sky2:'#7a2c10', sky3:'#e8813a', hill:'#4a1c0c', focal:'volcano' },
     makeEnemies: () => [
       makeGroundEnemy(700, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
-      makeFlyingEnemy(1050, GROUND_Y-220, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
       makeGroundEnemy(1620, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
-      makeFlyingEnemy(1950, GROUND_Y-200, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+      makeFlyingEnemy(1950, GROUND_Y-130, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
       makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a' })
     ]
   },
@@ -524,9 +544,9 @@ const LEVEL_DEFS = {
     theme: { sky1:'#0a2440', sky2:'#0f4d6b', sky3:'#7fc9d6', hill:'#0d3550', focal:'bubble' },
     makeEnemies: () => [
       makeGroundEnemy(700, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
-      makeFlyingEnemy(1050, GROUND_Y-220, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
       makeGroundEnemy(1620, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
-      makeFlyingEnemy(1950, GROUND_Y-200, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+      makeFlyingEnemy(1950, GROUND_Y-130, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
       makeFlyingEnemy(2750, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff' })
     ]
   },
@@ -536,9 +556,9 @@ const LEVEL_DEFS = {
     theme: { sky1:'#1a3a6e', sky2:'#4c78c0', sky3:'#dcefff', hill:'#2e4f86', focal:'cloud' },
     makeEnemies: () => [
       makeFlyingEnemy(700, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
-      makeFlyingEnemy(1050, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
       makeFlyingEnemy(1620, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
-      makeFlyingEnemy(1950, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+      makeFlyingEnemy(1950, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
       makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff' })
     ]
   },
@@ -574,11 +594,11 @@ const QUEST_LEVEL_IDS = ['volcano', 'ocean', 'sky', 'jungle'];
 // x position - reused here instead of duplicating each enemy's stat block again.
 const ARENA_GRUNT_FACTORIES = [
   (x) => makeGroundEnemy(x, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
-  (x) => makeFlyingEnemy(x, GROUND_Y-220, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+  (x) => makeFlyingEnemy(x, GROUND_Y-150, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
   (x) => makeGroundEnemy(x, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
-  (x) => makeFlyingEnemy(x, GROUND_Y-220, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+  (x) => makeFlyingEnemy(x, GROUND_Y-150, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
   (x) => makeFlyingEnemy(x, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
-  (x) => makeFlyingEnemy(x, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+  (x) => makeFlyingEnemy(x, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
   (x) => makeGroundEnemy(x, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
   (x) => makeGroundEnemy(x, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true })
 ];
@@ -712,27 +732,59 @@ function updateProjectiles() {
   }
   projectiles = projectiles.filter(b => !b.dead);
 }
+// ---------- Aiming (the bow fires wherever the player is pointing, not just forward) ----------
+// Tracked in world space so it stays correct as the camera scrolls. Defaults to
+// straight ahead until the player actually points somewhere, so every other weapon
+// (and the bow before it's aimed at least once) behaves exactly as before.
+let mouseWorldX = null, mouseWorldY = null;
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseWorldX = (e.clientX - rect.left) * (W / rect.width) + camera.x;
+  mouseWorldY = (e.clientY - rect.top) * (H / rect.height);
+});
+canvas.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 0) return;
+  const t = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  mouseWorldX = (t.clientX - rect.left) * (W / rect.width) + camera.x;
+  mouseWorldY = (t.clientY - rect.top) * (H / rect.height);
+}, {passive:true});
+function getAimVector() {
+  if (mouseWorldX === null) return { x: player.facing, y: 0 };
+  const px = player.x + player.w/2, py = player.y + player.h/2 - 4;
+  const dx = mouseWorldX - px, dy = mouseWorldY - py;
+  const len = Math.hypot(dx, dy) || 1;
+  return { x: dx/len, y: dy/len };
+}
+
 // ---------- Player projectiles (the bow's arrows) ----------
 let playerProjectiles = [];
-function spawnPlayerArrow(dmg) {
+function spawnPlayerArrow(dmg, opts) {
+  const speed = (opts && opts.speed) || 10.5;
+  const pierce = !!(opts && opts.pierce);
+  let dir = { x: player.facing, y: 0 };
+  if (player.weapon.ranged) dir = getAimVector();
   playerProjectiles.push({
     x: player.x + player.w/2, y: player.y + player.h/2 - 4,
-    vx: player.facing * 10.5, r: 4, life: 90, dmg
+    vx: dir.x * speed, vy: dir.y * speed, r: 4, life: 90, dmg,
+    pierce, hitSet: pierce ? new Set() : null
   });
 }
 function updatePlayerProjectiles() {
   for (const b of playerProjectiles) {
     b.x += b.vx;
+    b.y += b.vy;
     b.life--;
     for (const en of enemies) {
       if (en.dead || en.buried) continue;
+      if (b.hitSet && b.hitSet.has(en)) continue;
       if (rectsOverlap({x:b.x-b.r, y:b.y-b.r, w:b.r*2, h:b.r*2}, {x:en.x, y:en.y, w:en.w, h:en.h})) {
         damageEnemy(en, b.dmg);
-        b.dead = true;
-        break;
+        if (b.pierce) b.hitSet.add(en);
+        else { b.dead = true; break; }
       }
     }
-    if (b.life <= 0 || b.x < 0 || b.x > LEVEL_WIDTH) b.dead = true;
+    if (b.life <= 0 || b.x < -60 || b.x > LEVEL_WIDTH + 60 || b.y < -500 || b.y > H + 500) b.dead = true;
   }
   playerProjectiles = playerProjectiles.filter(b => !b.dead);
 }
@@ -740,9 +792,9 @@ function drawPlayerProjectiles() {
   for (const b of playerProjectiles) {
     ctx.save();
     ctx.translate(b.x - camera.x, b.y);
-    if (b.vx < 0) ctx.scale(-1, 1);
-    ctx.strokeStyle = '#8a6a3a';
-    ctx.lineWidth = 2;
+    ctx.rotate(Math.atan2(b.vy, b.vx));
+    ctx.strokeStyle = b.pierce ? '#ffd35c' : '#8a6a3a';
+    ctx.lineWidth = b.pierce ? 3 : 2;
     ctx.beginPath(); ctx.moveTo(-11, 0); ctx.lineTo(5, 0); ctx.stroke();
     ctx.fillStyle = '#c9d6e3';
     ctx.beginPath(); ctx.moveTo(5, -3); ctx.lineTo(12, 0); ctx.lineTo(5, 3); ctx.fill();
@@ -963,7 +1015,7 @@ function updatePlayer() {
 
   player.blocking = !!keys['KeyL'] && player.attackWindup === 0 && !player.attacking;
 
-  const speed = player.blocking ? (player.shield.locksMovement ? 0 : 1.3) : 4.1;
+  const speed = player.blocking ? (player.shield.locksMovement ? 0 : (player.shield.fastBlock ? 4.1 : 1.3)) : 4.1;
   let moveInput = 0;
   if (keys['ArrowLeft'] || keys['KeyA']) moveInput -= 1;
   if (keys['ArrowRight'] || keys['KeyD']) moveInput += 1;
@@ -1120,7 +1172,8 @@ function damagePlayer(amount, invulnFrames) {
   let dmg = amount;
   if (player.blocking) {
     dmg = amount * player.shield.blockReduction;
-    player.sta = Math.max(0, player.sta - amount * 0.5);
+    if (player.shield.manaCost) player.fp = Math.max(0, player.fp - amount * 0.5);
+    else player.sta = Math.max(0, player.sta - amount * 0.5);
     player.blockFlash = 10;
     if (player.shield.thorns) retaliateNearbyEnemy();
   }
@@ -1214,6 +1267,10 @@ function startSpecial() {
   } else if (type === 'shortblade') {
     player.specialTimer = 30;
   } else if (type === 'bow') {
+    player.specialTimer = 24;
+  } else if (type === 'flail') {
+    player.specialTimer = 36;
+  } else if (type === 'scythe') {
     player.specialTimer = 30;
   }
 }
@@ -1319,9 +1376,28 @@ function updateSpecial() {
       player.attacking = false;
     }
   } else if (type === 'bow') {
+    // one heavily-aimed, piercing shot instead of a spread - a real "sniper" pick
     player.specialTimer--;
-    if ([24, 16, 8].includes(player.specialTimer)) {
-      spawnPlayerArrow(currentWeaponDmg() * 1.3);
+    if (player.specialTimer === 14) {
+      spawnPlayerArrow(currentWeaponDmg() * 3.2, { speed: 16, pierce: true });
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'flail') {
+    player.specialTimer--;
+    if ([28, 18, 8].includes(player.specialTimer)) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 0.8, 70);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'scythe') {
+    player.specialTimer--;
+    if (player.specialTimer === 14) {
+      resolveAttackHit(currentWeaponDmg() * 1.6, player.weapon.range + 40);
     }
     if (player.specialTimer <= 0) {
       player.specialType = null;
@@ -1810,6 +1886,8 @@ function drawWeaponSprite(p) {
   if (w.key === 'greataxe' && p.skyAxe) return; // the axe is drawn flying up/down elsewhere
 
   let angle = -0.4;
+  // the bow always points at wherever the player is aiming (mouse/touch), not just forward
+  const bowAimAngle = w.ranged ? Math.atan2(getAimVector().y * p.facing, getAimVector().x * p.facing) : null;
   if (p.specialType === 'sword') {
     const t = 1 - p.specialTimer / 26;
     angle = t * Math.PI * 2.4; // fast full spin for the whirl slash
@@ -1837,7 +1915,14 @@ function drawWeaponSprite(p) {
   } else if (p.specialType === 'shortblade') {
     angle = 0.3 + Math.sin(frame * 1.6) * 0.6; // frantic close-range flicker
   } else if (p.specialType === 'bow') {
-    angle = -0.3 + Math.sin(frame * 0.7) * 0.15; // steady aim between shots
+    angle = bowAimAngle + Math.sin(frame * 0.7) * 0.06; // slight tremor while lining up the shot
+  } else if (p.specialType === 'flail') {
+    angle = (frame * 0.5) % (Math.PI * 2); // continuous overhead spin
+  } else if (p.specialType === 'scythe') {
+    const t = 1 - p.specialTimer / 30;
+    angle = -1.5 + t * 3.0; // one big wide sweep
+  } else if (w.ranged) {
+    angle = bowAimAngle; // always pointed at the aim direction outside of specials
   } else if (p.attackWindup > 0) {
     const t = 1 - p.attackWindup / w.windup;
     angle = -0.9 + t * 1.6;
@@ -1946,6 +2031,29 @@ function drawWeaponSprite(p) {
     ctx.lineTo(-drawBack, 0);
     ctx.lineTo(22*Math.cos(1.1), 22*Math.sin(1.1));
     ctx.stroke();
+  } else if (w.key === 'flail') {
+    ctx.strokeStyle = '#8a6a3a';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(16, 0); ctx.stroke();
+    const swing = p.specialType === 'flail' ? Math.sin(frame*0.6)*0.8 : 0;
+    ctx.save();
+    ctx.translate(16, 0);
+    ctx.rotate(0.6 + swing);
+    ctx.strokeStyle = '#6a5a4a';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(18,4); ctx.stroke();
+    ctx.fillStyle = '#5a5f68';
+    ctx.beginPath(); ctx.arc(20, 5, 8, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  } else if (w.key === 'scythe') {
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(-4, -3, 44, 6);
+    ctx.fillStyle = '#8a1a2a';
+    ctx.beginPath();
+    ctx.moveTo(38, -4);
+    ctx.quadraticCurveTo(58, -14, 52, 6);
+    ctx.quadraticCurveTo(46, 2, 38, 4);
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -2940,7 +3048,7 @@ function updateWeaponShopOverlay() {
 }
 
 function updateShieldShopOverlay() {
-  const digitCodes = ['Digit1','Digit2','Digit3'];
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4','Digit5'];
   PURCHASABLE_SHIELD_KEYS.forEach((key, i) => {
     if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) selectOrBuyShield(key);
   });
@@ -3065,6 +3173,24 @@ function drawShieldIcon(key) {
       ctx.moveTo(-6, oy-6); ctx.lineTo(-20, oy); ctx.lineTo(-6, oy+6);
       ctx.fill();
     }
+  } else if (key === 'buckler') {
+    ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI*2);
+    ctx.fillStyle = '#c9a24a';
+    ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI*2);
+    ctx.fillStyle = '#e8d9a0';
+    ctx.fill();
+    ctx.fillStyle = '#8a6a3a';
+    ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI*2); ctx.fill();
+  } else if (key === 'manashield') {
+    roundRect(ctx, -14, -32, 28, 64, 10);
+    ctx.fillStyle = '#2a3a6a';
+    ctx.fill();
+    roundRect(ctx, -8, -24, 16, 48, 6);
+    ctx.fillStyle = '#5c9dff';
+    ctx.fill();
+    ctx.fillStyle = '#dff0ff';
+    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fill();
   } else {
     roundRect(ctx, -13, -32, 26, 64, 10);
     ctx.fillStyle = '#8a6a3a';
@@ -3091,10 +3217,10 @@ function renderShieldShopOverlay() {
   ctx.fillText(`金幣：${player.gold}`, W/2, 84);
 
   villageCardRects = [];
-  const cw = 220, ch = 220, gap = 24;
+  const cw = 168, ch = 195, gap = 16;
   const totalW = PURCHASABLE_SHIELD_KEYS.length * cw + (PURCHASABLE_SHIELD_KEYS.length - 1) * gap;
   const startX = W/2 - totalW/2;
-  const y = 118;
+  const y = 110;
 
   PURCHASABLE_SHIELD_KEYS.forEach((key, i) => {
     const s = SHIELDS[key];
@@ -3113,33 +3239,33 @@ function renderShieldShopOverlay() {
     ctx.stroke();
 
     ctx.save();
-    ctx.translate(x+cw/2, y+82);
-    ctx.scale(0.9, 0.9);
+    ctx.translate(x+cw/2, y+66);
+    ctx.scale(0.68, 0.68);
     drawShieldIcon(key);
     ctx.restore();
 
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 18px sans-serif';
-    ctx.fillText(s.name, x+cw/2, y+140);
-    ctx.font = '12px sans-serif';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(s.name, x+cw/2, y+116);
+    ctx.font = '10px sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.78)';
-    wrapFillText(s.desc, x+cw/2, y+162, cw-30, 15);
+    wrapFillText(s.desc, x+cw/2, y+134, cw-20, 13);
 
     if (equipped) {
       ctx.fillStyle = '#4CC15A';
-      ctx.font = 'bold 13px sans-serif';
+      ctx.font = 'bold 12px sans-serif';
       ctx.fillText('裝備中', x+cw/2, y+ch-26);
     } else if (owned) {
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.font = '12px sans-serif';
+      ctx.font = '11px sans-serif';
       ctx.fillText('已擁有', x+cw/2, y+ch-26);
     } else {
       ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
-      ctx.font = 'bold 14px sans-serif';
+      ctx.font = 'bold 13px sans-serif';
       ctx.fillText(`${s.price} 金幣`, x+cw/2, y+ch-26);
     }
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = '11px sans-serif';
+    ctx.font = '10px sans-serif';
     ctx.fillText(`按 ${i+1} 或點擊${owned ? '裝備' : '購買'}`, x+cw/2, y+ch-10);
   });
 
@@ -3168,8 +3294,8 @@ function renderWeaponShopOverlay() {
   const cw = 118, ch = 108, gap = 8, maxPerRow = 6;
   const total = PURCHASABLE_WEAPON_KEYS.length;
   const rowsCount = Math.ceil(total / maxPerRow);
-  const rowPitch = ch + gap + 6;
-  const topY = 64;
+  const rowPitch = ch + gap + 4;
+  const topY = 60;
 
   PURCHASABLE_WEAPON_KEYS.forEach((key, i) => {
     const row = Math.floor(i / maxPerRow);
@@ -3557,6 +3683,39 @@ function drawWeaponIcon(key) {
     ctx.moveTo(34*Math.cos(-1.2), 34*Math.sin(-1.2));
     ctx.lineTo(-4, 0);
     ctx.lineTo(34*Math.cos(1.2), 34*Math.sin(1.2));
+    ctx.stroke();
+  } else if (key === 'flail') {
+    ctx.strokeStyle = '#8a6a3a';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(0, 30); ctx.lineTo(0, -6);
+    ctx.stroke();
+    ctx.strokeStyle = '#6a5a4a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -6); ctx.lineTo(-6, -22); ctx.lineTo(6, -34); ctx.lineTo(0, -48);
+    ctx.stroke();
+    ctx.fillStyle = '#5a5f68';
+    ctx.beginPath(); ctx.arc(0, -50, 12, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#3a3a3a';
+    for (let i = 0; i < 6; i++) {
+      const ang = i * Math.PI / 3;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(ang)*12, -50+Math.sin(ang)*12);
+      ctx.lineTo(Math.cos(ang)*18, -50+Math.sin(ang)*18);
+      ctx.stroke();
+    }
+  } else if (key === 'scythe') {
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(-4, -30, 8, 90);
+    ctx.fillStyle = '#8a1a2a';
+    ctx.beginPath();
+    ctx.moveTo(0, -30);
+    ctx.quadraticCurveTo(-50, -40, -46, 0);
+    ctx.quadraticCurveTo(-30, -6, 0, -14);
+    ctx.fill();
+    ctx.strokeStyle = '#c9a24a';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   }
   ctx.restore();
