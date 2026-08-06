@@ -223,13 +223,25 @@ const WEAPONS = {
     dmg: 9, cooldown: 16, staminaCost: 7, range: 62, windup: 3, color:'#c2a15a',
     desc: '攻擊最快，傷害最低', speedRating: 3, dmgRating: 1,
     specialName: '五連刺', specialCost: 22, specialCooldown: 100
+  },
+  dualdagger: {
+    name: '雙刀', key:'dualdagger', price: 40,
+    dmg: 7, cooldown: 12, staminaCost: 6, range: 40, windup: 2, color:'#d94f6a',
+    desc: '攻擊極快，近距離', speedRating: 3, dmgRating: 1,
+    specialName: '疾風突進', specialCost: 24, specialCooldown: 110
+  },
+  greataxe: {
+    name: '巨斧', key:'greataxe', price: 45,
+    dmg: 38, cooldown: 64, staminaCost: 26, range: 54, windup: 18, color:'#5a6b7a',
+    desc: '攻擊最慢，傷害最高', speedRating: 1, dmgRating: 3,
+    specialName: '大地嘯', specialCost: 40, specialCooldown: 160
   }
 };
 const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the special instead of a tap
 
 // ---------- Game state ----------
 let state = 'menu'; // menu -> playing -> lose
-let overlay = null;  // null | 'shop' | 'quest' - modal UI shown over the village
+let overlay = null;  // null | 'weaponshop' | 'armorshop' | 'quest' - modal UI shown over the village
 let selectedWeapon = 'sword';
 let levelTimeLeft = 130 * 60; // frames (~130s at 60fps)
 let frame = 0;
@@ -255,12 +267,13 @@ const ADVENTURE_PLATFORMS = [
   {x:2190, y:GROUND_Y, w:810, h:80}
 ];
 // The village is one flat, safe walkway - no gaps, no enemies.
-const VILLAGE_WIDTH = 1500;
+const VILLAGE_WIDTH = 2400;
 const VILLAGE_PLATFORMS = [
   {x:0, y:GROUND_Y, w:VILLAGE_WIDTH, h:80}
 ];
-const VILLAGE_SHOP_X = 480;
-const VILLAGE_TREE_X = 940;
+const VILLAGE_WEAPON_SHOP_X = 480;
+const VILLAGE_ARMOR_SHOP_X = 980;
+const VILLAGE_TREE_X = 1600;
 
 let platforms = ADVENTURE_PLATFORMS;
 
@@ -297,6 +310,7 @@ const player = {
   specialTimer: 0,
   specialPhase: 0,
   hammerThrow: null,   // {x,y,vx,vy,returning,hitSet} while the hammer is away from hand
+  dashSpecial: null,   // {hitSet} while the dual-dagger gale dash is resolving
   // potions (do not regenerate - only refilled by picking up more, or a fresh run)
   hpPotions: 3, maxHpPotions: 3,
   fpPotions: 3, maxFpPotions: 3,
@@ -304,7 +318,8 @@ const player = {
   // village shop
   gold: 0,
   weaponDmgBonus: 0,
-  shopLevels: { weapon:0, armor:0, hpflask:0, fpflask:0 }
+  shopLevels: { weapon:0, armor:0, hpflask:0, fpflask:0 },
+  unlockedWeapons: new Set(['sword', 'hammer', 'spear'])
 };
 
 function currentWeaponDmg() {
@@ -318,6 +333,21 @@ const SHOP_ITEMS = [
   { id:'hpflask', name:'HP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 },
   { id:'fpflask', name:'MP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 }
 ];
+// Same purchase system, split across the two physical shop buildings in the village.
+const WEAPON_SHOP_UPGRADE_ITEMS = SHOP_ITEMS.filter(i => i.id === 'weapon');
+const ARMOR_SHOP_ITEMS = SHOP_ITEMS.filter(i => i.id !== 'weapon');
+const PURCHASABLE_WEAPON_KEYS = ['sword', 'hammer', 'spear', 'dualdagger', 'greataxe'];
+function selectOrBuyWeapon(key) {
+  const w = WEAPONS[key];
+  if (!w) return;
+  if (player.unlockedWeapons.has(key)) {
+    player.weapon = w;
+  } else if (w.price && player.gold >= w.price) {
+    player.gold -= w.price;
+    player.unlockedWeapons.add(key);
+    player.weapon = w;
+  }
+}
 function shopItemCost(item) {
   return item.baseCost + item.costStep * player.shopLevels[item.id];
 }
@@ -407,7 +437,7 @@ const LEVEL_DEFS = {
       makeFlyingEnemy(1050, GROUND_Y-220, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
       makeGroundEnemy(1620, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
       makeFlyingEnemy(1950, GROUND_Y-200, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
-      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:64, h:68, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a' })
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a' })
     ]
   },
   ocean: {
@@ -419,7 +449,7 @@ const LEVEL_DEFS = {
       makeFlyingEnemy(1050, GROUND_Y-220, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
       makeGroundEnemy(1620, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
       makeFlyingEnemy(1950, GROUND_Y-200, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
-      makeFlyingEnemy(2750, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:56, h:46, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff' })
+      makeFlyingEnemy(2750, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff' })
     ]
   },
   sky: {
@@ -431,7 +461,7 @@ const LEVEL_DEFS = {
       makeFlyingEnemy(1050, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
       makeFlyingEnemy(1620, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:2.1, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
       makeFlyingEnemy(1950, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
-      makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:58, h:48, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff' })
+      makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff' })
     ]
   },
   jungle: {
@@ -443,7 +473,7 @@ const LEVEL_DEFS = {
       makeGroundEnemy(780, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a' }),
       makeGroundEnemy(1550, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
       makeGroundEnemy(1650, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a' }),
-      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:62, h:50, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0' })
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0' })
     ]
   },
   village: {
@@ -621,10 +651,17 @@ canvas.addEventListener('click', (e) => {
         startGame(key);
       }
     });
-  } else if (overlay === 'shop') {
+  } else if (overlay === 'armorshop') {
     for (const card of villageCardRects) {
       if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
         buyShopItem(card.id);
+      }
+    }
+  } else if (overlay === 'weaponshop') {
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        if (card.kind === 'weapon') selectOrBuyWeapon(card.id);
+        else buyShopItem(card.id);
       }
     }
   } else if (overlay === 'quest') {
@@ -644,6 +681,7 @@ function startGame(weaponKey) {
   player.gold = 0;
   player.weaponDmgBonus = 0;
   player.shopLevels = { weapon:0, armor:0, hpflask:0, fpflask:0 };
+  player.unlockedWeapons = new Set(['sword', 'hammer', 'spear']);
   frame = 0;
   enterLevel('redmoon');
 }
@@ -670,6 +708,7 @@ function enterLevel(levelId) {
   player.specialTimer = 0;
   player.specialPhase = 0;
   player.hammerThrow = null;
+  player.dashSpecial = null;
   player.potionCooldown = 0;
   camera.x = 0;
   levelTimeLeft = def.isVillage ? Infinity : 130*60;
@@ -711,10 +750,11 @@ function updatePlayer() {
     player.vy = -13.2;
     player.onGround = false;
   }
-  // in the village, pressing jump near the shop or the tree opens that modal instead
+  // in the village, pressing jump near a shop or the tree opens that modal instead
   if (currentLevelId === 'village' && jumpDown && !villageJumpPrev && wasOnGround) {
     const px = player.x + player.w/2;
-    if (Math.abs(px - VILLAGE_SHOP_X) < 70) overlay = 'shop';
+    if (Math.abs(px - VILLAGE_WEAPON_SHOP_X) < 70) overlay = 'weaponshop';
+    else if (Math.abs(px - VILLAGE_ARMOR_SHOP_X) < 70) overlay = 'armorshop';
     else if (Math.abs(px - VILLAGE_TREE_X) < 70) overlay = 'quest';
   }
   villageJumpPrev = jumpDown;
@@ -895,6 +935,11 @@ function startSpecial() {
     };
   } else if (type === 'spear') {
     player.specialTimer = 44;
+  } else if (type === 'dualdagger') {
+    player.specialTimer = 20;
+    player.dashSpecial = { hitSet: new Set() };
+  } else if (type === 'greataxe') {
+    player.specialTimer = 30;
   }
 }
 
@@ -917,6 +962,33 @@ function updateSpecial() {
     player.specialTimer--;
     if ([38, 30, 22, 14, 6].includes(player.specialTimer)) {
       resolveAttackHit(currentWeaponDmg() * 0.75, player.weapon.range + 8);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'dualdagger') {
+    // gale dash: blink forward, damaging everything passed through once
+    player.x += player.facing * 9;
+    player.x = Math.max(0, Math.min(LEVEL_WIDTH - player.w, player.x));
+    const hb = { x: player.x, y: player.y, w: player.w, h: player.h };
+    for (const en of enemies) {
+      if (en.dead || player.dashSpecial.hitSet.has(en)) continue;
+      if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
+        damageEnemy(en, currentWeaponDmg() * 1.3);
+        player.dashSpecial.hitSet.add(en);
+      }
+    }
+    player.specialTimer--;
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+      player.dashSpecial = null;
+    }
+  } else if (type === 'greataxe') {
+    player.specialTimer--;
+    if (player.specialTimer === 14) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 1.5, 80);
     }
     if (player.specialTimer <= 0) {
       player.specialType = null;
@@ -1345,6 +1417,11 @@ function drawWeaponSprite(p) {
     const t = 1 - p.specialTimer / 44;
     const cyc = (t * 5) % 1; // 5 quick thrust/retract cycles
     angle = cyc < 0.4 ? -0.9 + (cyc/0.4) * 1.5 : 0.6 - ((cyc-0.4)/0.6) * 1.5;
+  } else if (p.specialType === 'dualdagger') {
+    angle = 0.2 + Math.sin(frame * 1.3) * 0.5; // rapid slashing flicker during the dash
+  } else if (p.specialType === 'greataxe') {
+    const t = 1 - p.specialTimer / 30;
+    angle = -1.1 + t * 2.0; // one huge overhead swing
   } else if (p.attackWindup > 0) {
     const t = 1 - p.attackWindup / w.windup;
     angle = -0.9 + t * 1.6;
@@ -1371,6 +1448,28 @@ function drawWeaponSprite(p) {
     ctx.beginPath();
     ctx.moveTo(42, -6); ctx.lineTo(52, 0); ctx.lineTo(42, 6);
     ctx.fill();
+  } else if (w.key === 'dualdagger') {
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(0, -2, 26, 4);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, -3, 8, 6);
+    ctx.save();
+    ctx.rotate(-0.6);
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(0, -2, 22, 4);
+    ctx.restore();
+  } else if (w.key === 'greataxe') {
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(0, -2, 30, 4);
+    ctx.fillStyle = '#5a6b7a';
+    ctx.beginPath();
+    ctx.moveTo(24, -16); ctx.quadraticCurveTo(48, -18, 44, 2);
+    ctx.quadraticCurveTo(48, 20, 24, 18);
+    ctx.quadraticCurveTo(30, 2, 24, -16);
+    ctx.fill();
+    ctx.strokeStyle = '#3a3a3a';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -1409,6 +1508,185 @@ function shadeColor(hex, percent) {
   let g = Math.max(0, Math.min(255, ((num >> 8) & 0xff) + Math.round(2.55*percent)));
   let b = Math.max(0, Math.min(255, (num & 0xff) + Math.round(2.55*percent)));
   return `rgb(${r},${g},${b})`;
+}
+
+// Bosses get their own bigger, more elaborate silhouette instead of a scaled-up mob:
+// a four-legged horned beast for ground bosses, a winged horned dragon for flying ones,
+// plus a pulsing dark aura underneath to read as unmistakably "boss" at a glance.
+function drawBossCreature(en) {
+  if (en.exploding) {
+    const warnPct = en.explodeTimer / 30;
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, 14 + (1-warnPct) * (en.explodeRadius || 130));
+  } else if (en.telegraph || en.charging) {
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, en.burst ? 56 : 40);
+  }
+
+  const pulse = 0.5 + 0.5 * Math.sin(frame * 0.07);
+  ctx.save();
+  ctx.globalAlpha = 0.28 + 0.14 * pulse;
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.ellipse(en.x + en.w/2, en.y + en.h + 4, en.w*0.62, 12, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(en.x, en.y);
+  if (en.hitFlash > 0) ctx.filter = 'brightness(1.8)';
+  if (en.type === 'bomb') drawBossBeast(en); else drawBossDragon(en);
+  ctx.restore();
+
+  drawEnemyHp(en);
+}
+
+function drawBossBeast(en) {
+  const cx = en.w/2, cy = en.h*0.58;
+  const bodyW = en.w*0.62, bodyH = en.h*0.5;
+
+  // tail with a spiked tip
+  ctx.fillStyle = shadeColor(en.colorMain, -15);
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyW*0.9, cy);
+  ctx.quadraticCurveTo(cx - en.w*0.55, cy - en.h*0.15, cx - en.w*0.48, cy - en.h*0.42);
+  ctx.quadraticCurveTo(cx - en.w*0.42, cy - en.h*0.1, cx - bodyW*0.7, cy + bodyH*0.2);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.5, cy - en.h*0.38);
+  ctx.lineTo(cx - en.w*0.6, cy - en.h*0.52);
+  ctx.lineTo(cx - en.w*0.44, cy - en.h*0.3);
+  ctx.fill();
+
+  // back legs (behind the body)
+  ctx.fillStyle = shadeColor(en.colorMain, -25);
+  roundRect(ctx, cx - bodyW*0.55, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+  roundRect(ctx, cx + bodyW*0.35, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+
+  // body
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 2;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.stroke();
+
+  // front legs with claws (in front of the body)
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, cx - bodyW*0.85, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  roundRect(ctx, cx + bodyW*0.55, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  for (const lx of [cx - bodyW*0.85, cx + bodyW*0.55]) {
+    ctx.beginPath();
+    ctx.moveTo(lx-2, en.h*1.02); ctx.lineTo(lx+en.w*0.16+2, en.h*1.02); ctx.lineTo(lx+en.w*0.08, en.h*1.1);
+    ctx.fill();
+  }
+
+  // spine spikes
+  ctx.fillStyle = en.colorAccent;
+  for (let i = 0; i < 5; i++) {
+    const sx = cx - bodyW*0.7 + i*(bodyW*1.4/4);
+    const sh = bodyH*0.5 * (1 - Math.abs(i-2)/3);
+    ctx.beginPath();
+    ctx.moveTo(sx-6, cy-bodyH*0.85);
+    ctx.lineTo(sx+6, cy-bodyH*0.85);
+    ctx.lineTo(sx, cy-bodyH*0.85-sh-10);
+    ctx.fill();
+  }
+
+  // head with horns and glowing eyes
+  const hx = cx + bodyW*0.9, hy = cy - bodyH*0.55;
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, en.w*0.24, en.h*0.2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, 8);
+  roundRect(ctx, hx + en.w*0.1, hy - en.h*0.06, en.w*0.22, en.h*0.16, 6);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(hx - en.w*0.05, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.02, hy - en.h*0.42);
+  ctx.lineTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.2, hy - en.h*0.4);
+  ctx.lineTo(hx + en.w*0.24, hy - en.h*0.14);
+  ctx.fill();
+  const eyeGlow = en.telegraph ? (0.6 + 0.4*Math.sin(frame*0.8)) : 1;
+  ctx.globalAlpha = eyeGlow;
+  ctx.beginPath(); ctx.arc(hx+en.w*0.05, hy-en.h*0.02, 3.4, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = shadeColor(en.colorMain, -40);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(hx + en.w*0.1, hy + en.h*0.08);
+  ctx.lineTo(hx + en.w*0.3, hy + en.h*0.1);
+  ctx.stroke();
+}
+
+function drawBossDragon(en) {
+  const cx = en.w/2, cy = en.h/2;
+  const flap = Math.sin(frame*0.15) * 0.5;
+
+  // tail
+  ctx.fillStyle = shadeColor(en.colorMain, -15);
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.4, cy);
+  ctx.quadraticCurveTo(cx - en.w*0.75, cy + en.h*0.1, cx - en.w*0.95, cy - en.h*0.15);
+  ctx.quadraticCurveTo(cx - en.w*0.7, cy + en.h*0.05, cx - en.w*0.35, cy + en.h*0.15);
+  ctx.fill();
+
+  // wings (behind the body, flapping)
+  ctx.fillStyle = shadeColor(en.colorMain, -20);
+  ctx.save();
+  ctx.translate(cx - en.w*0.1, cy);
+  ctx.rotate(-0.5 - flap);
+  ctx.beginPath();
+  ctx.moveTo(0,0); ctx.lineTo(-en.w*0.55, -en.h*0.35); ctx.lineTo(-en.w*0.5, en.h*0.05); ctx.lineTo(-en.w*0.2, en.h*0.15);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.translate(cx - en.w*0.1, cy);
+  ctx.rotate(0.5 + flap);
+  ctx.beginPath();
+  ctx.moveTo(0,0); ctx.lineTo(-en.w*0.55, en.h*0.35); ctx.lineTo(-en.w*0.5, -en.h*0.05); ctx.lineTo(-en.w*0.2, -en.h*0.15);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // body + lighter belly
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx-en.w*0.42, cy-en.h*0.34, en.w*0.75, en.h*0.68, en.h*0.3);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 2;
+  roundRect(ctx, cx-en.w*0.42, cy-en.h*0.34, en.w*0.75, en.h*0.68, en.h*0.3);
+  ctx.stroke();
+  ctx.fillStyle = shadeColor(en.colorMain, 20);
+  roundRect(ctx, cx-en.w*0.3, cy-en.h*0.05, en.w*0.5, en.h*0.32, en.h*0.14);
+  ctx.fill();
+
+  // head with horns and glowing eyes
+  const hx = cx + en.w*0.42, hy = cy - en.h*0.1;
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, en.w*0.2, en.h*0.22, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(hx-en.w*0.06, hy-en.h*0.18); ctx.lineTo(hx-en.w*0.02, hy-en.h*0.42); ctx.lineTo(hx+en.w*0.06, hy-en.h*0.18);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx+en.w*0.08, hy-en.h*0.18); ctx.lineTo(hx+en.w*0.14, hy-en.h*0.4); ctx.lineTo(hx+en.w*0.2, hy-en.h*0.16);
+  ctx.fill();
+  const eyeGlow = en.charging ? (0.6 + 0.4*Math.sin(frame*0.8)) : 1;
+  ctx.globalAlpha = eyeGlow;
+  ctx.beginPath(); ctx.arc(hx+en.w*0.06, hy-en.h*0.02, 3.2, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = shadeColor(en.colorMain, 6);
+  roundRect(ctx, hx+en.w*0.14, hy-en.h*0.06, en.w*0.16, en.h*0.14, 4);
+  ctx.fill();
 }
 
 function drawBombBot(en) {
@@ -1812,7 +2090,8 @@ function render() {
     if (en.dead && !(en.type==='bomb' && en.exploding)) continue;
     ctx.save();
     ctx.translate(-camera.x, 0);
-    if (en.type === 'bomb') drawBombBot(en);
+    if (en.isBoss) drawBossCreature(en);
+    else if (en.type === 'bomb') drawBombBot(en);
     else drawDrone(en);
     ctx.restore();
   }
@@ -1829,7 +2108,8 @@ function render() {
   drawHUD();
 
   if (state === 'lose') renderOverlay('挑戰失敗', '按 R 重新挑戰', '#e0453f');
-  if (overlay === 'shop') renderShopOverlay();
+  if (overlay === 'weaponshop') renderWeaponShopOverlay();
+  if (overlay === 'armorshop') renderArmorShopOverlay();
   if (overlay === 'quest') renderQuestOverlay();
 }
 
@@ -1851,7 +2131,13 @@ function renderOverlay(title, sub, color) {
 // tree and pressing jump opens a modal (`overlay`) on top of the scene; the shop
 // reuses the same purchase system the old full-screen village screen had.
 let villageCardRects = [];
-const villageKeyState = { 1:{}, 2:{}, 3:{}, 4:{} };
+// Auto-vivifying per-key-code state for pressedOnce(), so any overlay can use as many
+// number-key slots as it needs without a fixed-size lookup table going out of bounds.
+const villageKeyStates = {};
+function villageKeyState(code) {
+  if (!villageKeyStates[code]) villageKeyStates[code] = {};
+  return villageKeyStates[code];
+}
 const QUEST_INFO = {
   volcano: { emoji:'🌋' },
   ocean:   { emoji:'🌊' },
@@ -1859,45 +2145,43 @@ const QUEST_INFO = {
   jungle:  { emoji:'🌿' }
 };
 
-function updateShopOverlay() {
+function updateArmorShopOverlay() {
   const digitCodes = ['Digit1','Digit2','Digit3','Digit4'];
-  SHOP_ITEMS.forEach((item, i) => {
-    if (pressedOnce(digitCodes[i], villageKeyState[i+1])) buyShopItem(item.id);
+  ARMOR_SHOP_ITEMS.forEach((item, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) buyShopItem(item.id);
   });
+}
+
+function updateWeaponShopOverlay() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4','Digit5'];
+  PURCHASABLE_WEAPON_KEYS.forEach((key, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) selectOrBuyWeapon(key);
+  });
+  if (pressedOnce('Digit6', villageKeyState('Digit6'))) buyShopItem('weapon');
 }
 
 function updateQuestOverlay() {
   const digitCodes = ['Digit1','Digit2','Digit3','Digit4'];
   QUEST_LEVEL_IDS.forEach((id, i) => {
-    if (pressedOnce(digitCodes[i], villageKeyState[i+1])) enterLevel(id);
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) enterLevel(id);
   });
 }
 
-function renderShopOverlay() {
-  ctx.fillStyle = 'rgba(20,10,30,0.7)';
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 30px sans-serif';
-  ctx.fillText('村莊商店', W/2, 56);
-  ctx.font = 'bold 18px sans-serif';
-  ctx.fillStyle = '#f5c542';
-  ctx.fillText(`金幣：${player.gold}`, W/2, 84);
-
-  villageCardRects = [];
+// Generic "level-based repeatable purchase" shop screen - used for the armor shop
+// (armor / HP flask / MP flask) and reused for the weapon-strength card in the
+// weapon shop, since both use the same shopLevels + cost-scaling system.
+function renderItemShopCards(items, y, startIndex) {
   const cw = 200, ch = 190, gap = 20;
-  const totalW = SHOP_ITEMS.length * cw + (SHOP_ITEMS.length - 1) * gap;
+  const totalW = items.length * cw + (items.length - 1) * gap;
   const startX = W/2 - totalW/2;
-  const y = 110;
 
-  SHOP_ITEMS.forEach((item, i) => {
+  items.forEach((item, i) => {
     const x = startX + i * (cw + gap);
     const level = player.shopLevels[item.id];
     const maxed = level >= item.maxLevel;
     const cost = shopItemCost(item);
     const afford = !maxed && player.gold >= cost;
-    villageCardRects.push({x, y, w:cw, h:ch, id:item.id});
+    villageCardRects.push({x, y, w:cw, h:ch, id:item.id, kind:'item'});
 
     ctx.fillStyle = afford ? 'rgba(76,193,90,0.16)' : 'rgba(255,255,255,0.08)';
     roundRect(ctx, x, y, cw, ch, 12);
@@ -1928,12 +2212,101 @@ function renderShopOverlay() {
     }
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = '11px sans-serif';
-    ctx.fillText(`按 ${i+1} 或點擊購買`, x+cw/2, y+ch-20);
+    ctx.fillText(`按 ${startIndex+i+1} 或點擊購買`, x+cw/2, y+ch-20);
   });
+}
+
+function renderArmorShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('防具商店', W/2, 56);
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 84);
+
+  villageCardRects = [];
+  renderItemShopCards(ARMOR_SHOP_ITEMS, 110, 0);
 
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '13px sans-serif';
   ctx.fillText('L 離開商店', W/2, H-24);
+  ctx.textAlign = 'left';
+}
+
+function renderWeaponShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('武器商店', W/2, 40);
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 64);
+
+  villageCardRects = [];
+  const cw = 168, ch = 168, gap = 14;
+  const totalW = PURCHASABLE_WEAPON_KEYS.length * cw + (PURCHASABLE_WEAPON_KEYS.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+  const y = 82;
+
+  PURCHASABLE_WEAPON_KEYS.forEach((key, i) => {
+    const w = WEAPONS[key];
+    const owned = player.unlockedWeapons.has(key);
+    const equipped = player.weapon.key === key;
+    const afford = !owned && player.gold >= (w.price || 0);
+    const x = startX + i * (cw + gap);
+    villageCardRects.push({x, y, w:cw, h:ch, id:key, kind:'weapon'});
+
+    ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : (owned || afford) ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.05)';
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.fill();
+    ctx.strokeStyle = equipped ? '#4CC15A' : (owned ? 'rgba(255,255,255,0.4)' : (afford ? '#f5c542' : 'rgba(255,255,255,0.25)'));
+    ctx.lineWidth = equipped ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x+cw/2, y+62);
+    ctx.scale(0.85, 0.85);
+    drawWeaponIcon(key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(w.name, x+cw/2, y+108);
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText(w.desc, x+cw/2, y+126);
+
+    if (equipped) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText('裝備中', x+cw/2, y+ch-24);
+    } else if (owned) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('已擁有', x+cw/2, y+ch-24);
+    } else {
+      ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(`${w.price} 金幣`, x+cw/2, y+ch-24);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊${owned ? '裝備' : '購買'}`, x+cw/2, y+ch-8);
+  });
+
+  renderItemShopCards(WEAPON_SHOP_UPGRADE_ITEMS, y + ch + 24, 5);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('L 離開商店', W/2, H-16);
   ctx.textAlign = 'left';
 }
 
@@ -1990,24 +2363,31 @@ function renderQuestOverlay() {
   ctx.textAlign = 'left';
 }
 
-function drawVillageProps() {
-  // shop building
+function drawShopBuilding(x, label, roofColor, bodyColor, icon) {
   ctx.save();
-  ctx.translate(VILLAGE_SHOP_X - camera.x, GROUND_Y);
-  ctx.fillStyle = '#6b4a34';
-  roundRect(ctx, -50, -110, 100, 110, 6); ctx.fill();
-  ctx.fillStyle = '#8a5a3c';
-  ctx.beginPath(); ctx.moveTo(-60,-110); ctx.lineTo(0,-150); ctx.lineTo(60,-110); ctx.closePath(); ctx.fill();
+  ctx.translate(x - camera.x, GROUND_Y);
+  ctx.fillStyle = bodyColor;
+  roundRect(ctx, -54, -118, 108, 118, 6); ctx.fill();
+  ctx.fillStyle = roofColor;
+  ctx.beginPath(); ctx.moveTo(-66,-118); ctx.lineTo(0,-162); ctx.lineTo(66,-118); ctx.closePath(); ctx.fill();
   ctx.fillStyle = '#3a2418';
-  roundRect(ctx, -16, -46, 32, 46, 4); ctx.fill();
+  roundRect(ctx, -17, -50, 34, 50, 4); ctx.fill();
   ctx.fillStyle = '#f5c542';
-  roundRect(ctx, -40, -84, 24, 24, 3); ctx.fill();
-  roundRect(ctx, 16, -84, 24, 24, 3); ctx.fill();
+  roundRect(ctx, -44, -90, 26, 26, 3); ctx.fill();
+  roundRect(ctx, 18, -90, 26, 26, 3); ctx.fill();
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 14px sans-serif';
+  ctx.font = 'bold 26px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('商店', 0, -122);
+  ctx.fillText(icon, 0, -138);
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillText(label, 0, -172);
   ctx.restore();
+  ctx.textAlign = 'left';
+}
+
+function drawVillageProps() {
+  drawShopBuilding(VILLAGE_WEAPON_SHOP_X, '武器商店', '#7a4a3a', '#5a3f30', '⚔️');
+  drawShopBuilding(VILLAGE_ARMOR_SHOP_X, '防具商店', '#3a5a7a', '#30475a', '🛡️');
 
   // big tree
   ctx.save();
@@ -2020,13 +2400,16 @@ function drawVillageProps() {
   }
   ctx.fillStyle = '#f5c542';
   ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
   ctx.fillText('!', 0, -175);
   ctx.restore();
   ctx.textAlign = 'left';
 
-  // proximity hints
+  // proximity hints - skip while a modal is already open, so the hint text doesn't bleed through the dark tint
+  if (overlay) return;
   const px = player.x + player.w/2;
-  if (Math.abs(px - VILLAGE_SHOP_X) < 70) drawInteractHint(VILLAGE_SHOP_X, GROUND_Y-160, '按跳躍鍵進入商店');
+  if (Math.abs(px - VILLAGE_WEAPON_SHOP_X) < 70) drawInteractHint(VILLAGE_WEAPON_SHOP_X, GROUND_Y-180, '按跳躍鍵進入武器商店');
+  if (Math.abs(px - VILLAGE_ARMOR_SHOP_X) < 70) drawInteractHint(VILLAGE_ARMOR_SHOP_X, GROUND_Y-180, '按跳躍鍵進入防具商店');
   if (Math.abs(px - VILLAGE_TREE_X) < 70) drawInteractHint(VILLAGE_TREE_X, GROUND_Y-200, '按跳躍鍵接取任務');
 }
 
@@ -2139,6 +2522,34 @@ function drawWeaponIcon(key) {
     ctx.beginPath();
     ctx.moveTo(-14,-30); ctx.lineTo(0,-64); ctx.lineTo(14,-30);
     ctx.fill();
+  } else if (key === 'dualdagger') {
+    ctx.save();
+    ctx.rotate(0.9);
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(-3, -46, 6, 50);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 2, 12, 8);
+    ctx.restore();
+    ctx.save();
+    ctx.rotate(-0.9);
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(-3, -46, 6, 50);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 2, 12, 8);
+    ctx.restore();
+  } else if (key === 'greataxe') {
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-4, -18, 8, 82);
+    ctx.fillStyle = '#5a6b7a';
+    ctx.beginPath();
+    ctx.moveTo(-4, -50); ctx.quadraticCurveTo(-40, -46, -34, -14);
+    ctx.quadraticCurveTo(-16, -22, -4, -14);
+    ctx.quadraticCurveTo(8, -22, 26, -14);
+    ctx.quadraticCurveTo(32, -46, -4, -50);
+    ctx.fill();
+    ctx.strokeStyle = '#3a3a3a';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -2153,11 +2564,19 @@ window.addEventListener('keydown', (e) => {
 });
 
 function loop() {
-  if (state === 'menu') updateMenu();
-  else if (overlay === 'shop') updateShopOverlay();
-  else if (overlay === 'quest') updateQuestOverlay();
-  update();
-  render();
+  // A single bad frame must never permanently freeze the game: requestAnimationFrame
+  // only reschedules itself if reached, so any thrown error here has to be caught
+  // rather than silently stopping every future frame.
+  try {
+    if (state === 'menu') updateMenu();
+    else if (overlay === 'weaponshop') updateWeaponShopOverlay();
+    else if (overlay === 'armorshop') updateArmorShopOverlay();
+    else if (overlay === 'quest') updateQuestOverlay();
+    update();
+    render();
+  } catch (err) {
+    console.error('game loop error:', err);
+  }
   requestAnimationFrame(loop);
 }
 loop();
