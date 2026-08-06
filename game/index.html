@@ -757,6 +757,9 @@ function updatePlayer() {
     if (Math.abs(px - VILLAGE_WEAPON_SHOP_X) < 70) overlay = 'weaponshop';
     else if (Math.abs(px - VILLAGE_ARMOR_SHOP_X) < 70) overlay = 'armorshop';
     else if (Math.abs(px - VILLAGE_TREE_X) < 70) overlay = 'quest';
+    // walking into a shop, not jumping into it - cancel the incidental hop above so
+    // physics resume grounded (not mid-air) once the overlay closes again
+    if (overlay) { player.vy = 0; player.onGround = true; }
   }
   villageJumpPrev = jumpDown;
 
@@ -2522,7 +2525,7 @@ function renderArmorShopOverlay() {
 
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '13px sans-serif';
-  ctx.fillText('L 離開商店', W/2, H-24);
+  ctx.fillText('按 J／L／跳躍鍵 離開商店', W/2, H-24);
   ctx.textAlign = 'left';
 }
 
@@ -2595,7 +2598,7 @@ function renderWeaponShopOverlay() {
 
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '13px sans-serif';
-  ctx.fillText('L 離開商店', W/2, H-16);
+  ctx.fillText('按 J／L／跳躍鍵 離開商店', W/2, H-16);
   ctx.textAlign = 'left';
 }
 
@@ -2648,7 +2651,7 @@ function renderQuestOverlay() {
 
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '13px sans-serif';
-  ctx.fillText('L 離開', W/2, H-24);
+  ctx.fillText('按 J／L／跳躍鍵 離開', W/2, H-24);
   ctx.textAlign = 'left';
 }
 
@@ -2847,7 +2850,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && state === 'lose') {
     state = 'menu';
   }
-  if ((e.code === 'KeyL' || e.code === 'Escape' || e.code === 'KeyJ') && overlay) {
+  if ((e.code === 'KeyL' || e.code === 'Escape' || e.code === 'KeyJ' || e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') && overlay) {
     overlay = null;
   }
 });
