@@ -41,6 +41,17 @@
   #tc-jump { width:74px; height:74px; background:rgba(80,180,255,0.3); border-color:rgba(80,180,255,0.6); }
   #tc-skill { width:58px; height:58px; background:rgba(120,90,255,0.35); border-color:rgba(150,120,255,0.7); }
   #tc-shield { width:64px; height:64px; background:rgba(80,220,180,0.3); border-color:rgba(80,220,180,0.65); }
+  #tc-joystick {
+    position:relative; width:112px; height:112px; border-radius:50%;
+    background:rgba(255,255,255,0.10); border:2px solid rgba(255,255,255,0.3);
+    pointer-events:auto; touch-action:none;
+  }
+  #tc-joystick-knob {
+    position:absolute; width:48px; height:48px; border-radius:50%;
+    background:rgba(255,255,255,0.35); border:2px solid rgba(255,255,255,0.55);
+    left:50%; top:50%; transform:translate(-50%,-50%);
+    pointer-events:none;
+  }
   #hint {
     position:absolute; top:10px; left:50%; transform:translateX(-50%);
     color:rgba(255,255,255,0.55); font-size:12px; letter-spacing:1px; pointer-events:none;
@@ -52,10 +63,7 @@
   <canvas id="game" width="960" height="600"></canvas>
   <div id="hint">←→/A D 移動　空白鍵 跳躍　J 攻擊　K 龍息(FP)　L 舉盾防禦</div>
   <div id="touch-controls">
-    <div class="tc-group">
-      <div class="tc-btn" id="tc-left">◀</div>
-      <div class="tc-btn" id="tc-right">▶</div>
-    </div>
+    <div id="tc-joystick"><div id="tc-joystick-knob"></div></div>
     <div class="tc-group">
       <div class="tc-btn" id="tc-skill">龍息</div>
       <div class="tc-btn" id="tc-shield">防禦</div>
@@ -130,12 +138,61 @@ function syncTouchControlsToCanvas() {
 window.addEventListener('resize', syncTouchControlsToCanvas);
 window.addEventListener('orientationchange', syncTouchControlsToCanvas);
 syncTouchControlsToCanvas();
-bindTouch('tc-left', 'ArrowLeft');
-bindTouch('tc-right', 'ArrowRight');
 bindTouch('tc-jump', 'Space');
 bindTouch('tc-attack', 'KeyJ');
 bindTouch('tc-skill', 'KeyK');
 bindTouch('tc-shield', 'KeyL');
+
+// Virtual joystick: drag within the circular base to move the direction keys,
+// same up/down/left/right axes a physical d-pad would drive.
+function setupJoystick() {
+  const base = document.getElementById('tc-joystick');
+  const knob = document.getElementById('tc-joystick-knob');
+  const maxR = 34;
+  const deadzone = 10;
+  let activePointerId = null;
+
+  function setKnob(dx, dy) {
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  }
+  function resetKeys() {
+    keys['ArrowLeft'] = false; keys['ArrowRight'] = false;
+    keys['ArrowUp'] = false; keys['ArrowDown'] = false;
+  }
+  function updateFromPointer(clientX, clientY) {
+    const rect = base.getBoundingClientRect();
+    const cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+    let dx = clientX - cx, dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxR) { dx = dx/dist*maxR; dy = dy/dist*maxR; }
+    setKnob(dx, dy);
+    resetKeys();
+    if (dx > deadzone) keys['ArrowRight'] = true;
+    else if (dx < -deadzone) keys['ArrowLeft'] = true;
+    if (dy > deadzone) keys['ArrowDown'] = true;
+    else if (dy < -deadzone) keys['ArrowUp'] = true;
+  }
+  function endDrag(e) {
+    if (e.pointerId !== activePointerId) return;
+    activePointerId = null;
+    setKnob(0, 0);
+    resetKeys();
+  }
+
+  base.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    activePointerId = e.pointerId;
+    base.setPointerCapture(e.pointerId);
+    updateFromPointer(e.clientX, e.clientY);
+  });
+  base.addEventListener('pointermove', e => {
+    if (e.pointerId !== activePointerId) return;
+    updateFromPointer(e.clientX, e.clientY);
+  });
+  base.addEventListener('pointerup', endDrag);
+  base.addEventListener('pointercancel', endDrag);
+}
+setupJoystick();
 
 function pressedOnce(code, state) {
   const now = !!keys[code];
@@ -250,7 +307,7 @@ function makeBombBot(x, groundY) {
   const home = platforms.find(p => x >= p.x && x <= p.x + p.w) || {x:0, w:LEVEL_WIDTH};
   return {
     type:'bomb', x, y:groundY-40, w:38, h:40, vx:0, vy:0,
-    hp:80, maxHp:80, dmg:8, speed:0.55, dir: -1,
+    hp:80, maxHp:80, dmg:12, speed:0.55, dir: -1,
     homeMinX: home.x, homeMaxX: home.x + home.w - 38,
     onGround:true, hitFlash:0, exploding:false, explodeTimer:0,
     attackCooldown:0, telegraph:false, attackWindup:0, dead:false, groundY
@@ -268,6 +325,61 @@ function makeDrone(x, y) {
 // ---------- Particles (fire breath, hits, explosions) ----------
 let particles = [];
 function addParticle(p) { particles.push(p); }
+
+// ---------- Projectiles (bombs thrown by bomb bots) ----------
+let projectiles = [];
+function throwBomb(en) {
+  projectiles.push({
+    x: en.x + en.w/2, y: en.y + en.h/2 - 12,
+    vx: en.dir * 4.6, vy: -8.6,
+    r: 6, life: 150, dmg: en.dmg
+  });
+}
+function updateProjectiles() {
+  for (const b of projectiles) {
+    b.vy += GRAVITY * 0.65; // a floatier lob than the player's own gravity
+    b.x += b.vx;
+    b.y += b.vy;
+    b.life--;
+    let landed = false;
+    for (const p of platforms) {
+      if (b.x > p.x && b.x < p.x + p.w && b.y + b.r >= p.y && b.vy >= 0) { landed = true; break; }
+    }
+    const hitPlayer = rectsOverlap({x:b.x-b.r, y:b.y-b.r, w:b.r*2, h:b.r*2}, player);
+    if (landed || hitPlayer || b.life <= 0 || b.y > H + 300) {
+      explodeAt(b.x, b.y, 70, b.dmg);
+      b.dead = true;
+    }
+  }
+  projectiles = projectiles.filter(b => !b.dead);
+}
+function drawProjectiles() {
+  for (const b of projectiles) {
+    ctx.save();
+    ctx.translate(b.x - camera.x, b.y);
+    ctx.rotate(frame * 0.25);
+    ctx.fillStyle = '#2b2b33';
+    ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#c9a24a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -b.r);
+    ctx.quadraticCurveTo(4, -b.r-6, 2, -b.r-9);
+    ctx.stroke();
+    ctx.fillStyle = frame % 10 < 5 ? '#ff5a3c' : '#ffcf4a';
+    ctx.beginPath(); ctx.arc(2, -b.r-10, 2, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+function explodeAt(cx, cy, radius, dmg) {
+  for (let i = 0; i < 16; i++) {
+    const ang = (Math.PI*2*i)/16;
+    addParticle({type:'spark', x:cx, y:cy,
+      vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:22, maxLife:22, size:4+Math.random()*3, color:'#ff9d4d'});
+  }
+  const d = Math.hypot((player.x+player.w/2)-cx, (player.y+player.h/2)-cy);
+  if (d < radius) damagePlayer(dmg, 40);
+}
 
 // ---------- Weapon select screen ----------
 const weaponOrder = ['sword','hammer','spear'];
@@ -314,6 +426,7 @@ function startGame(weaponKey) {
   frame = 0;
   spawnLevel1Enemies();
   particles = [];
+  projectiles = [];
   state = 'playing';
 }
 
@@ -323,7 +436,7 @@ function updatePlayer() {
 
   player.blocking = !!keys['KeyL'] && player.attackWindup === 0 && !player.attacking;
 
-  const speed = player.blocking ? 1.3 : 3.6;
+  const speed = player.blocking ? 1.3 : 4.1;
   let moveInput = 0;
   if (keys['ArrowLeft'] || keys['KeyA']) moveInput -= 1;
   if (keys['ArrowRight'] || keys['KeyD']) moveInput += 1;
@@ -340,7 +453,7 @@ function updatePlayer() {
 
   // jump
   if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
-    player.vy = -12.4;
+    player.vy = -13.2;
     player.onGround = false;
   }
 
@@ -506,14 +619,7 @@ function updateEnemies() {
       if (en.type === 'bomb' && en.exploding) {
         en.explodeTimer--;
         if (en.explodeTimer === 6) {
-          for (let i=0;i<16;i++) {
-            const ang = (Math.PI*2*i)/16;
-            addParticle({type:'spark', x:en.x+en.w/2, y:en.y+en.h/2,
-              vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:22,maxLife:22, size:4+Math.random()*3, color:'#ff9d4d'});
-          }
-          // damage player if close
-          const d = Math.hypot((player.x+player.w/2)-(en.x+en.w/2), (player.y+player.h/2)-(en.y+en.h/2));
-          if (d < 90) damagePlayer(14, 40);
+          explodeAt(en.x+en.w/2, en.y+en.h/2, 90, 14);
         }
       }
       continue;
@@ -521,15 +627,18 @@ function updateEnemies() {
     if (en.hitFlash > 0) en.hitFlash--;
 
     if (en.type === 'bomb') {
-      // walk back and forth, chase player if close & on similar y - frozen during its telegraph wind-up
+      const dx = player.x - en.x;
+      const inThrowRange = Math.abs(dx) < 360 && Math.abs(player.y - en.y) < 110;
+      // walk back and forth, face and approach the player if in range - frozen during its telegraph wind-up
       if (!en.telegraph) {
-        const dx = player.x - en.x;
-        if (Math.abs(dx) < 260 && Math.abs((player.y)-(en.y)) < 80) {
+        if (inThrowRange) {
           en.dir = dx > 0 ? 1 : -1;
+          if (Math.abs(dx) > 160) en.x += en.dir * en.speed;
         } else if (frame % 90 === 0) {
           en.dir *= -1;
+        } else {
+          en.x += en.dir * en.speed;
         }
-        en.x += en.dir * en.speed;
         // stay on its own platform - turn around at the edge instead of walking over a gap
         if (en.x <= en.homeMinX) { en.x = en.homeMinX; en.dir = 1; }
         if (en.x >= en.homeMaxX) { en.x = en.homeMaxX; en.dir = -1; }
@@ -537,16 +646,17 @@ function updateEnemies() {
       en.y = en.groundY - en.h;
 
       if (en.attackCooldown > 0) en.attackCooldown--;
-      if (!en.telegraph && rectsOverlap(en, player) && en.attackCooldown<=0) {
+      if (!en.telegraph && inThrowRange && en.attackCooldown<=0) {
         en.telegraph = true;
-        en.attackWindup = 26; // ~0.43s tell before the hit lands
+        en.attackWindup = 30; // wind-up (arm raised) before the throw
+        en.dir = dx > 0 ? 1 : -1;
       }
       if (en.telegraph) {
         en.attackWindup--;
         if (en.attackWindup <= 0) {
           en.telegraph = false;
-          en.attackCooldown = 60;
-          if (rectsOverlap(en, player)) damagePlayer(en.dmg);
+          en.attackCooldown = 110;
+          throwBomb(en);
         }
       }
     } else if (en.type === 'drone') {
@@ -850,15 +960,51 @@ function drawBombBot(en) {
   ctx.save();
   ctx.translate(en.x, en.y);
   if (en.hitFlash > 0) ctx.filter = 'brightness(2)';
+
+  // legs
+  ctx.fillStyle = '#26262c';
+  roundRect(ctx, en.w/2-11, en.h-8, 7, 12, 2); ctx.fill();
+  roundRect(ctx, en.w/2+4, en.h-8, 7, 12, 2); ctx.fill();
+  ctx.fillStyle = '#1c1c22';
+  roundRect(ctx, en.w/2-13, en.h+1, 10, 4, 2); ctx.fill();
+  roundRect(ctx, en.w/2+3, en.h+1, 10, 4, 2); ctx.fill();
+
+  // resting arm, tucked mostly behind the round torso on the side opposite the throw
+  ctx.fillStyle = '#3a3a44';
+  roundRect(ctx, en.w/2 + (-en.dir)*17 - 4, en.h/2-2, 8, 13, 3); ctx.fill();
+
   // body - round bomb-like robot
   ctx.fillStyle = '#3a3a44';
   ctx.beginPath();
   ctx.arc(en.w/2, en.h/2+4, 17, 0, Math.PI*2);
   ctx.fill();
-  ctx.fillStyle = '#1c1c22';
+  ctx.strokeStyle = '#1c1c22';
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.arc(en.w/2, en.h/2+4, 17, 0, Math.PI*2);
   ctx.stroke();
+
+  // throwing arm - winds up and back before releasing a bomb
+  ctx.save();
+  ctx.translate(en.w/2 + en.dir*10, en.h/2+2);
+  let armAngle = en.dir * 0.5;
+  if (en.telegraph) {
+    const t = 1 - en.attackWindup / 30;
+    armAngle = en.dir * (0.5 - t * 2.1);
+  }
+  ctx.rotate(armAngle);
+  ctx.fillStyle = '#3a3a44';
+  roundRect(ctx, -4, 0, 8, 15, 3);
+  ctx.fill();
+  if (en.telegraph) {
+    ctx.fillStyle = '#1c1c22';
+    ctx.beginPath(); ctx.arc(0, 17, 5, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#c9a24a';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(0, 12); ctx.lineTo(2, 8); ctx.stroke();
+  }
+  ctx.restore();
+
   // cross-bolt face like the sketch
   ctx.strokeStyle = '#e8e8ee';
   ctx.lineWidth = 3;
@@ -1065,6 +1211,7 @@ function update() {
   if (levelTimeLeft <= 0) { state = 'lose'; }
   updatePlayer();
   updateEnemies();
+  updateProjectiles();
   updateParticles();
 }
 
@@ -1086,6 +1233,8 @@ function render() {
     else drawDrone(en);
     ctx.restore();
   }
+
+  drawProjectiles();
 
   ctx.save();
   ctx.translate(-camera.x, 0);
