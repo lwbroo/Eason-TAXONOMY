@@ -234,7 +234,19 @@ const WEAPONS = {
     name: '巨斧', key:'greataxe', price: 45,
     dmg: 38, cooldown: 64, staminaCost: 26, range: 54, windup: 18, color:'#5a6b7a',
     desc: '攻擊最慢，傷害最高', speedRating: 1, dmgRating: 3,
-    specialName: '大地嘯', specialCost: 40, specialCooldown: 160
+    specialName: '沖天擲', specialCost: 40, specialCooldown: 160
+  },
+  whip: {
+    name: '鞭', key:'whip', price: 35,
+    dmg: 6, cooldown: 10, staminaCost: 5, range: 85, windup: 2, color:'#8a4fd9',
+    desc: '攻擊超快，觸及最遠', speedRating: 3, dmgRating: 1,
+    specialName: '千裂鞭牙', specialCost: 20, specialCooldown: 90
+  },
+  greatsword: {
+    name: '巨劍', key:'greatsword', price: 55,
+    dmg: 34, cooldown: 58, staminaCost: 24, range: 70, windup: 16, color:'#c9a24a',
+    desc: '攻擊慢，傷害極高，範圍大', speedRating: 1, dmgRating: 3,
+    specialName: '十字斬', specialCost: 34, specialCooldown: 150
   }
 };
 const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the special instead of a tap
@@ -311,6 +323,7 @@ const player = {
   specialPhase: 0,
   hammerThrow: null,   // {x,y,vx,vy,returning,hitSet} while the hammer is away from hand
   dashSpecial: null,   // {hitSet} while the dual-dagger gale dash is resolving
+  skyAxe: null,        // {x,y} launch point while the greataxe is thrown skyward
   // potions (do not regenerate - only refilled by picking up more, or a fresh run)
   hpPotions: 3, maxHpPotions: 3,
   fpPotions: 3, maxFpPotions: 3,
@@ -318,7 +331,7 @@ const player = {
   // village shop
   gold: 0,
   weaponDmgBonus: 0,
-  shopLevels: { weapon:0, armor:0, hpflask:0, fpflask:0 },
+  shopLevels: { weapon:0, armor:0, mana:0, hpflask:0, fpflask:0 },
   unlockedWeapons: new Set(['sword', 'hammer', 'spear'])
 };
 
@@ -330,13 +343,14 @@ function currentWeaponDmg() {
 const SHOP_ITEMS = [
   { id:'weapon',  name:'武器強化', desc:'+4 攻擊力',            baseCost:20, costStep:10, maxLevel:5 },
   { id:'armor',   name:'護甲',    desc:'+20 上限HP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
+  { id:'mana',    name:'魔力強化', desc:'+20 上限MP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
   { id:'hpflask', name:'HP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 },
   { id:'fpflask', name:'MP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 }
 ];
 // Same purchase system, split across the two physical shop buildings in the village.
 const WEAPON_SHOP_UPGRADE_ITEMS = SHOP_ITEMS.filter(i => i.id === 'weapon');
 const ARMOR_SHOP_ITEMS = SHOP_ITEMS.filter(i => i.id !== 'weapon');
-const PURCHASABLE_WEAPON_KEYS = ['sword', 'hammer', 'spear', 'dualdagger', 'greataxe'];
+const PURCHASABLE_WEAPON_KEYS = ['sword', 'hammer', 'spear', 'dualdagger', 'greataxe', 'whip', 'greatsword'];
 function selectOrBuyWeapon(key) {
   const w = WEAPONS[key];
   if (!w) return;
@@ -362,6 +376,7 @@ function buyShopItem(id) {
   player.shopLevels[id]++;
   if (id === 'weapon') player.weaponDmgBonus += 4;
   else if (id === 'armor') { player.maxHp += 20; player.hp = Math.min(player.maxHp, player.hp + 20); }
+  else if (id === 'mana') { player.maxFp += 20; player.fp = Math.min(player.maxFp, player.fp + 20); }
   else if (id === 'hpflask') { player.maxHpPotions++; player.hpPotions = Math.min(player.maxHpPotions, player.hpPotions + 1); }
   else if (id === 'fpflask') { player.maxFpPotions++; player.fpPotions = Math.min(player.maxFpPotions, player.fpPotions + 1); }
 }
@@ -611,6 +626,43 @@ function drawHammerThrow() {
   ctx.restore();
 }
 
+// Greataxe special: the axe leaves the player's hand, rockets straight up, hangs
+// briefly at the peak (with a landing-zone telegraph so the impact is readable),
+// then plummets back down onto its launch point.
+function drawSkyAxe() {
+  if (!player.skyAxe || player.specialType !== 'greataxe') return;
+  const totalT = 50;
+  const t = totalT - player.specialTimer;
+  const { x, y } = player.skyAxe;
+  let offsetY;
+  if (t < 16) {
+    offsetY = -(t / 16) * 220;
+  } else if (t < 30) {
+    offsetY = -220 + Math.sin((t - 16) * 0.5) * 6;
+  } else {
+    const p = (t - 30) / 18;
+    offsetY = -220 + p * p * 220;
+  }
+  if (t >= 16) {
+    drawAttackTelegraph(x - camera.x, y, 90);
+  }
+  ctx.save();
+  ctx.translate(x - camera.x, y + offsetY);
+  ctx.rotate(frame * 0.35);
+  ctx.fillStyle = '#5a4632';
+  ctx.fillRect(-15, -2, 30, 4);
+  ctx.fillStyle = '#5a6b7a';
+  ctx.beginPath();
+  ctx.moveTo(9, -16); ctx.quadraticCurveTo(33, -18, 29, 2);
+  ctx.quadraticCurveTo(33, 20, 9, 18);
+  ctx.quadraticCurveTo(15, 2, 9, -16);
+  ctx.fill();
+  ctx.strokeStyle = '#3a3a3a';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.restore();
+}
+
 function explodeAt(cx, cy, radius, dmg) {
   for (let i = 0; i < 16; i++) {
     const ang = (Math.PI*2*i)/16;
@@ -684,7 +736,7 @@ function startGame(weaponKey) {
   player.maxHp = 100; player.maxHpPotions = 3; player.maxFpPotions = 3;
   player.gold = 0;
   player.weaponDmgBonus = 0;
-  player.shopLevels = { weapon:0, armor:0, hpflask:0, fpflask:0 };
+  player.shopLevels = { weapon:0, armor:0, mana:0, hpflask:0, fpflask:0 };
   player.unlockedWeapons = new Set(['sword', 'hammer', 'spear']);
   frame = 0;
   enterLevel('redmoon');
@@ -713,6 +765,7 @@ function enterLevel(levelId) {
   player.specialPhase = 0;
   player.hammerThrow = null;
   player.dashSpecial = null;
+  player.skyAxe = null;
   player.potionCooldown = 0;
   camera.x = 0;
   levelTimeLeft = def.isVillage ? Infinity : 130*60;
@@ -912,9 +965,11 @@ function resolveAttackHit(dmgOverride, reachOverride) {
   }
 }
 
-// Sword special: hits everything in a radius around the player instead of a forward reach.
-function resolveSpecialAoeHit(dmg, radius) {
-  const cx = player.x + player.w/2, cy = player.y + player.h/2;
+// Sword special: hits everything in a radius around a center point (the player by
+// default, or an explicit point - e.g. where a thrown weapon lands).
+function resolveSpecialAoeHit(dmg, radius, atX, atY) {
+  const cx = atX != null ? atX : player.x + player.w/2;
+  const cy = atY != null ? atY : player.y + player.h/2;
   for (const en of enemies) {
     if (en.dead || en.buried) continue;
     const ex = en.x + en.w/2, ey = en.y + en.h/2;
@@ -946,7 +1001,13 @@ function startSpecial() {
     player.specialTimer = 20;
     player.dashSpecial = { hitSet: new Set() };
   } else if (type === 'greataxe') {
-    player.specialTimer = 30;
+    // thrown straight up, hangs at the peak, then crashes back down where it launched
+    player.specialTimer = 50;
+    player.skyAxe = { x: player.x + player.w/2, y: player.y + player.h/2 };
+  } else if (type === 'whip') {
+    player.specialTimer = 40;
+  } else if (type === 'greatsword') {
+    player.specialTimer = 34;
   }
 }
 
@@ -993,9 +1054,30 @@ function updateSpecial() {
       player.dashSpecial = null;
     }
   } else if (type === 'greataxe') {
+    // impact lands when the axe crashes back down at its launch point, not the
+    // player's current position - see drawSkyAxe() for the matching flight path
     player.specialTimer--;
-    if (player.specialTimer === 14) {
-      resolveSpecialAoeHit(currentWeaponDmg() * 1.5, 80);
+    if (player.specialTimer === 8) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 1.8, 90, player.skyAxe.x, player.skyAxe.y);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+      player.skyAxe = null;
+    }
+  } else if (type === 'whip') {
+    player.specialTimer--;
+    if ([34, 26, 18, 10].includes(player.specialTimer)) {
+      resolveAttackHit(currentWeaponDmg() * 0.85, player.weapon.range + 30);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'greatsword') {
+    player.specialTimer--;
+    if (player.specialTimer === 20 || player.specialTimer === 8) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 1.1, 70);
     }
     if (player.specialTimer <= 0) {
       player.specialType = null;
@@ -1247,8 +1329,13 @@ function drawFlaskIcon(x, y, color, count, keyLabel) {
 }
 
 function drawHUD() {
-  drawBar(56, 16, 180, 16, player.hp/player.maxHp, '#e0453f', 'rgba(60,10,10,0.7)', 'HP');
-  drawBar(56, 38, 180, 14, player.fp/player.maxFp, '#3f7fe0', 'rgba(10,20,60,0.7)', 'FP');
+  // HP/FP bars grow in length as their upgrades raise the max, instead of staying a
+  // fixed size and just reporting a smaller fraction filled - stamina has no upgrade
+  // path so its bar stays put.
+  const hpBarW = 180 * (player.maxHp / 100);
+  const fpBarW = 180 * (player.maxFp / 100);
+  drawBar(56, 16, hpBarW, 16, player.hp/player.maxHp, '#e0453f', 'rgba(60,10,10,0.7)', 'HP');
+  drawBar(56, 38, fpBarW, 14, player.fp/player.maxFp, '#3f7fe0', 'rgba(10,20,60,0.7)', 'FP');
   drawBar(56, 58, 180, 12, player.sta/player.maxSta, '#4fd15b', 'rgba(10,40,10,0.7)', '耐力');
 
   // timer top-right, echoing the "1:00" in the drawing - the village has no timer
@@ -1433,6 +1520,7 @@ function drawShieldSprite(p) {
 function drawWeaponSprite(p) {
   const w = p.weapon;
   if (w.key === 'hammer' && p.hammerThrow) return; // the hammer is drawn as a flying projectile elsewhere
+  if (w.key === 'greataxe' && p.skyAxe) return; // the axe is drawn flying up/down elsewhere
 
   let angle = -0.4;
   if (p.specialType === 'sword') {
@@ -1444,9 +1532,14 @@ function drawWeaponSprite(p) {
     angle = cyc < 0.4 ? -0.9 + (cyc/0.4) * 1.5 : 0.6 - ((cyc-0.4)/0.6) * 1.5;
   } else if (p.specialType === 'dualdagger') {
     angle = 0.2 + Math.sin(frame * 1.3) * 0.5; // rapid slashing flicker during the dash
-  } else if (p.specialType === 'greataxe') {
-    const t = 1 - p.specialTimer / 30;
-    angle = -1.1 + t * 2.0; // one huge overhead swing
+  } else if (p.specialType === 'whip') {
+    const t = 1 - p.specialTimer / 40;
+    const cyc = (t * 4) % 1; // 4 long cracking lashes
+    angle = cyc < 0.3 ? -0.7 + (cyc/0.3) * 1.9 : 1.2 - ((cyc-0.3)/0.7) * 1.9;
+  } else if (p.specialType === 'greatsword') {
+    const t = 1 - p.specialTimer / 34;
+    const cyc = (t * 2) % 1; // two big cross-pattern slashes
+    angle = -1.3 + cyc * 2.6;
   } else if (p.attackWindup > 0) {
     const t = 1 - p.attackWindup / w.windup;
     angle = -0.9 + t * 1.6;
@@ -1495,6 +1588,28 @@ function drawWeaponSprite(p) {
     ctx.strokeStyle = '#3a3a3a';
     ctx.lineWidth = 1.2;
     ctx.stroke();
+  } else if (w.key === 'whip') {
+    ctx.strokeStyle = '#8a4fd9';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    for (let i = 1; i <= 5; i++) {
+      const wig = Math.sin(frame * 0.4 + i * 0.8) * 3 * (i / 5);
+      ctx.lineTo(i * 12, wig);
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, -3, 8, 6);
+  } else if (w.key === 'greatsword') {
+    ctx.fillStyle = '#c9a24a';
+    ctx.fillRect(0, -3, 48, 6);
+    ctx.beginPath();
+    ctx.moveTo(48, -6); ctx.lineTo(58, 0); ctx.lineTo(48, 6);
+    ctx.fill();
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-14, -6, 16, 12);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-10, -3, 10, 6);
   }
   ctx.restore();
 }
@@ -2393,6 +2508,7 @@ function render() {
 
   drawProjectiles();
   drawHammerThrow();
+  drawSkyAxe();
 
   ctx.save();
   ctx.translate(-camera.x, 0);
@@ -2471,12 +2587,13 @@ function updateArmorShopOverlay() {
   });
 }
 
+const WEAPON_DIGIT_CODES = ['Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'];
 function updateWeaponShopOverlay() {
-  const digitCodes = ['Digit1','Digit2','Digit3','Digit4','Digit5'];
   PURCHASABLE_WEAPON_KEYS.forEach((key, i) => {
-    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) selectOrBuyWeapon(key);
+    if (pressedOnce(WEAPON_DIGIT_CODES[i], villageKeyState(WEAPON_DIGIT_CODES[i]))) selectOrBuyWeapon(key);
   });
-  if (pressedOnce('Digit6', villageKeyState('Digit6'))) buyShopItem('weapon');
+  const upgradeCode = WEAPON_DIGIT_CODES[PURCHASABLE_WEAPON_KEYS.length];
+  if (pressedOnce(upgradeCode, villageKeyState(upgradeCode))) buyShopItem('weapon');
 }
 
 function updateQuestOverlay() {
@@ -2563,24 +2680,33 @@ function renderWeaponShopOverlay() {
 
   ctx.textAlign = 'center';
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 30px sans-serif';
-  ctx.fillText('武器商店', W/2, 40);
-  ctx.font = 'bold 16px sans-serif';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.fillText('武器商店', W/2, 34);
+  ctx.font = 'bold 15px sans-serif';
   ctx.fillStyle = '#f5c542';
-  ctx.fillText(`金幣：${player.gold}`, W/2, 64);
+  ctx.fillText(`金幣：${player.gold}`, W/2, 56);
 
   villageCardRects = [];
-  const cw = 168, ch = 168, gap = 14;
-  const totalW = PURCHASABLE_WEAPON_KEYS.length * cw + (PURCHASABLE_WEAPON_KEYS.length - 1) * gap;
-  const startX = W/2 - totalW/2;
-  const y = 82;
+  // Wraps into rows once there are more weapons than fit across in one line, rather
+  // than shrinking every card - keeps each card readable as the roster grows.
+  const cw = 150, ch = 140, gap = 10, maxPerRow = 4;
+  const total = PURCHASABLE_WEAPON_KEYS.length;
+  const rowsCount = Math.ceil(total / maxPerRow);
+  const topY = 64;
 
   PURCHASABLE_WEAPON_KEYS.forEach((key, i) => {
+    const row = Math.floor(i / maxPerRow);
+    const col = i % maxPerRow;
+    const itemsInRow = Math.min(maxPerRow, total - row * maxPerRow);
+    const rowW = itemsInRow * cw + (itemsInRow - 1) * gap;
+    const startX = W/2 - rowW/2;
+    const x = startX + col * (cw + gap);
+    const y = topY + row * (ch + gap + 6);
+
     const w = WEAPONS[key];
     const owned = player.unlockedWeapons.has(key);
     const equipped = player.weapon.key === key;
     const afford = !owned && player.gold >= (w.price || 0);
-    const x = startX + i * (cw + gap);
     villageCardRects.push({x, y, w:cw, h:ch, id:key, kind:'weapon'});
 
     ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : (owned || afford) ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.05)';
@@ -2592,41 +2718,42 @@ function renderWeaponShopOverlay() {
     ctx.stroke();
 
     ctx.save();
-    ctx.translate(x+cw/2, y+62);
-    ctx.scale(0.85, 0.85);
+    ctx.translate(x+cw/2, y+50);
+    ctx.scale(0.72, 0.72);
     drawWeaponIcon(key);
     ctx.restore();
 
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillText(w.name, x+cw/2, y+108);
-    ctx.font = '10px sans-serif';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText(w.name, x+cw/2, y+90);
+    ctx.font = '9px sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText(w.desc, x+cw/2, y+126);
+    ctx.fillText(w.desc, x+cw/2, y+106);
 
     if (equipped) {
       ctx.fillStyle = '#4CC15A';
-      ctx.font = 'bold 12px sans-serif';
-      ctx.fillText('裝備中', x+cw/2, y+ch-24);
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillText('裝備中', x+cw/2, y+ch-22);
     } else if (owned) {
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.font = '11px sans-serif';
-      ctx.fillText('已擁有', x+cw/2, y+ch-24);
+      ctx.font = '10px sans-serif';
+      ctx.fillText('已擁有', x+cw/2, y+ch-22);
     } else {
       ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
-      ctx.font = 'bold 13px sans-serif';
-      ctx.fillText(`${w.price} 金幣`, x+cw/2, y+ch-24);
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(`${w.price} 金幣`, x+cw/2, y+ch-22);
     }
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = '10px sans-serif';
-    ctx.fillText(`按 ${i+1} 或點擊${owned ? '裝備' : '購買'}`, x+cw/2, y+ch-8);
+    ctx.font = '9px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊${owned ? '裝備' : '購買'}`, x+cw/2, y+ch-7);
   });
 
-  renderItemShopCards(WEAPON_SHOP_UPGRADE_ITEMS, y + ch + 24, 5);
+  const lastRowY = topY + (rowsCount - 1) * (ch + gap + 6);
+  renderItemShopCards(WEAPON_SHOP_UPGRADE_ITEMS, lastRowY + ch + 20, total);
 
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.font = '13px sans-serif';
-  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-16);
+  ctx.font = '12px sans-serif';
+  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-14);
   ctx.textAlign = 'left';
   drawOverlayCloseButton();
 }
@@ -2872,6 +2999,23 @@ function drawWeaponIcon(key) {
     ctx.strokeStyle = '#3a3a3a';
     ctx.lineWidth = 1.5;
     ctx.stroke();
+  } else if (key === 'whip') {
+    ctx.strokeStyle = '#8a4fd9';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, 30);
+    ctx.quadraticCurveTo(-4, 0, -22, -20);
+    ctx.quadraticCurveTo(-30, -32, -20, -42);
+    ctx.stroke();
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 24, 12, 14);
+  } else if (key === 'greatsword') {
+    ctx.fillStyle = '#c9a24a';
+    ctx.fillRect(-6, -56, 12, 74);
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-18, 16, 36, 12);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 26, 12, 18);
   }
   ctx.restore();
 }
