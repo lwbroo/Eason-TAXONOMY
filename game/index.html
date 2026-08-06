@@ -39,7 +39,8 @@
   .tc-btn:active { background:rgba(255,255,255,0.35); }
   #tc-attack { width:74px; height:74px; background:rgba(255,80,60,0.3); border-color:rgba(255,80,60,0.6); }
   #tc-jump { width:74px; height:74px; background:rgba(80,180,255,0.3); border-color:rgba(80,180,255,0.6); }
-  #tc-skill { width:58px; height:58px; background:rgba(120,90,255,0.35); border-color:rgba(150,120,255,0.7); }
+  #tc-hp-potion { width:52px; height:52px; background:rgba(255,107,92,0.3); border-color:rgba(255,107,92,0.6); font-size:14px; }
+  #tc-fp-potion { width:52px; height:52px; background:rgba(92,157,255,0.3); border-color:rgba(92,157,255,0.6); font-size:14px; }
   #tc-shield { width:64px; height:64px; background:rgba(80,220,180,0.3); border-color:rgba(80,220,180,0.65); }
   #tc-joystick {
     position:relative; width:112px; height:112px; border-radius:50%;
@@ -61,11 +62,12 @@
 <body>
 <div id="game-wrap">
   <canvas id="game" width="960" height="600"></canvas>
-  <div id="hint">←→/A D 移動　空白鍵 跳躍　J 攻擊　K 龍息(FP)　L 舉盾防禦</div>
+  <div id="hint">←→移動　⎵跳躍　J攻擊(長按=特技)　L防禦　1/2 藥水</div>
   <div id="touch-controls">
     <div id="tc-joystick"><div id="tc-joystick-knob"></div></div>
     <div class="tc-group">
-      <div class="tc-btn" id="tc-skill">龍息</div>
+      <div class="tc-btn" id="tc-hp-potion">HP瓶</div>
+      <div class="tc-btn" id="tc-fp-potion">MP瓶</div>
       <div class="tc-btn" id="tc-shield">防禦</div>
       <div class="tc-btn" id="tc-attack">攻擊</div>
       <div class="tc-btn" id="tc-jump">跳</div>
@@ -140,7 +142,8 @@ window.addEventListener('orientationchange', syncTouchControlsToCanvas);
 syncTouchControlsToCanvas();
 bindTouch('tc-jump', 'Space');
 bindTouch('tc-attack', 'KeyJ');
-bindTouch('tc-skill', 'KeyK');
+bindTouch('tc-hp-potion', 'Digit1');
+bindTouch('tc-fp-potion', 'Digit2');
 bindTouch('tc-shield', 'KeyL');
 
 // Virtual joystick: drag within the circular base to move the direction keys,
@@ -206,19 +209,23 @@ const WEAPONS = {
   sword: {
     name: '直劍', key:'sword',
     dmg: 16, cooldown: 26, staminaCost: 10, range: 46, windup: 5, color:'#c9d6e3',
-    desc: '攻擊快，傷害中等', speedRating: 2, dmgRating: 2
+    desc: '攻擊快，傷害中等', speedRating: 2, dmgRating: 2,
+    specialName: '回旋斬', specialCost: 28, specialCooldown: 100
   },
   hammer: {
     name: '大錘', key:'hammer',
     dmg: 30, cooldown: 52, staminaCost: 22, range: 50, windup: 14, color:'#9b7653',
-    desc: '攻擊慢，傷害最高', speedRating: 1, dmgRating: 3
+    desc: '攻擊慢，傷害最高', speedRating: 1, dmgRating: 3,
+    specialName: '投擲重錘', specialCost: 36, specialCooldown: 150
   },
   spear: {
     name: '長矛', key:'spear',
     dmg: 9, cooldown: 16, staminaCost: 7, range: 62, windup: 3, color:'#c2a15a',
-    desc: '攻擊最快，傷害最低', speedRating: 3, dmgRating: 1
+    desc: '攻擊最快，傷害最低', speedRating: 3, dmgRating: 1,
+    specialName: '五連刺', specialCost: 22, specialCooldown: 100
   }
 };
+const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the special instead of a tap
 
 // ---------- Game state ----------
 let state = 'menu'; // menu -> playing -> win -> lose
@@ -275,11 +282,21 @@ const player = {
   hitThisSwing: false,
   invuln: 0,
   weapon: WEAPONS.sword,
-  breathCooldown: 0,
   blocking: false,
   blockFlash: 0,
   dead: false,
-  walkCycle: 0
+  walkCycle: 0,
+  // long-press attack -> weapon special
+  attackHold: { holding:false, startFrame:0, specialFired:false },
+  specialCooldown: 0,
+  specialType: null,   // 'sword' | 'hammer' | 'spear' while a special is resolving
+  specialTimer: 0,
+  specialPhase: 0,
+  hammerThrow: null,   // {x,y,vx,vy,returning,hitSet} while the hammer is away from hand
+  // potions (do not regenerate - only refilled by picking up more, or a fresh run)
+  hpPotions: 3, maxHpPotions: 3,
+  fpPotions: 3, maxFpPotions: 3,
+  potionCooldown: 0
 };
 
 // ---------- Enemies ----------
@@ -371,6 +388,19 @@ function drawProjectiles() {
     ctx.restore();
   }
 }
+function drawHammerThrow() {
+  const h = player.hammerThrow;
+  if (!h) return;
+  ctx.save();
+  ctx.translate(h.x - camera.x, h.y);
+  ctx.rotate(frame * 0.5);
+  ctx.fillStyle = '#7a5a3a';
+  ctx.fillRect(-2, -13, 4, 26);
+  ctx.fillStyle = '#6b6f76';
+  ctx.fillRect(-10, -18, 20, 16);
+  ctx.restore();
+}
+
 function explodeAt(cx, cy, radius, dmg) {
   for (let i = 0; i < 16; i++) {
     const ang = (Math.PI*2*i)/16;
@@ -421,6 +451,15 @@ function startGame(weaponKey) {
   player.dead = false;
   player.lastGroundX = player.x;
   player.lastGroundY = player.y;
+  player.attackHold = { holding:false, startFrame:0, specialFired:false };
+  player.specialCooldown = 0;
+  player.specialType = null;
+  player.specialTimer = 0;
+  player.specialPhase = 0;
+  player.hammerThrow = null;
+  player.hpPotions = player.maxHpPotions;
+  player.fpPotions = player.maxFpPotions;
+  player.potionCooldown = 0;
   camera.x = 0;
   levelTimeLeft = 200*60;
   frame = 0;
@@ -490,43 +529,64 @@ function updatePlayer() {
     player.invuln = 60;
   }
 
-  // stamina regen
+  // stamina regen (FP does NOT regenerate on its own - only potions restore it)
   if (player.sta < player.maxSta) player.sta = Math.min(player.maxSta, player.sta + 0.35);
-  if (player.fp < player.maxFp) player.fp = Math.min(player.maxFp, player.fp + 0.12);
 
-  // attack
+  // attack: tap J for a normal swing, hold it past a short threshold for the weapon's
+  // FP-costing special. The special only fires once per hold; if it can't (no FP, on
+  // cooldown), releasing still falls back to a normal tap attack.
   if (player.attackCooldown > 0) player.attackCooldown--;
+  if (player.specialCooldown > 0) player.specialCooldown--;
   if (player.attackWindup > 0) {
     player.attackWindup--;
     if (player.attackWindup === 0) {
       resolveAttackHit();
     }
   }
-  if (pressedOnce('KeyJ', playerKeyState.attack) && !player.blocking && player.attackCooldown <= 0 && player.sta >= player.weapon.staminaCost) {
-    player.sta -= player.weapon.staminaCost;
-    player.attackCooldown = player.weapon.cooldown;
-    player.attackWindup = player.weapon.windup;
-    player.attacking = true;
-    player.hitThisSwing = false;
-    setTimeout(()=>{}, 0);
-  }
-  if (player.attackWindup === 0) player.attacking = false;
+  if (player.attackWindup === 0 && !player.specialType) player.attacking = false;
 
-  // dragon breath skill
-  if (player.breathCooldown > 0) player.breathCooldown--;
-  if (keys['KeyK'] && player.fp >= 0.9 && player.breathCooldown <= 0) {
-    player.fp -= 0.9;
-    if (frame % 3 === 0) {
-      addParticle({
-        type:'flame',
-        x: player.x + player.w/2 + player.facing*20,
-        y: player.y + 22,
-        vx: player.facing * (5 + Math.random()*2),
-        vy: (Math.random()-0.5)*2,
-        life: 26, maxLife:26, size: 8+Math.random()*6
-      });
+  const attackKeyDown = !!keys['KeyJ'];
+  const canStartAction = !player.blocking && player.attackCooldown <= 0 && !player.specialType;
+  if (attackKeyDown) {
+    if (!player.attackHold.holding) {
+      player.attackHold.holding = true;
+      player.attackHold.startFrame = frame;
+      player.attackHold.specialFired = false;
+      player.attackHold.thresholdChecked = false;
+    } else if (!player.attackHold.thresholdChecked && frame - player.attackHold.startFrame >= ATTACK_HOLD_THRESHOLD) {
+      player.attackHold.thresholdChecked = true;
+      if (canStartAction && player.specialCooldown <= 0 && player.fp >= player.weapon.specialCost) {
+        startSpecial();
+        player.attackHold.specialFired = true;
+      }
     }
-    damageEnemiesInBreath();
+  } else if (player.attackHold.holding) {
+    if (!player.attackHold.specialFired && canStartAction && player.sta >= player.weapon.staminaCost) {
+      player.sta -= player.weapon.staminaCost;
+      player.attackCooldown = player.weapon.cooldown;
+      player.attackWindup = player.weapon.windup;
+      player.attacking = true;
+      player.hitThisSwing = false;
+    }
+    player.attackHold.holding = false;
+  }
+
+  updateSpecial();
+
+  // potions: 1 = HP flask, 2 = FP flask - a short shared cooldown stops a held key spamming
+  if (player.potionCooldown > 0) player.potionCooldown--;
+  if (player.potionCooldown <= 0) {
+    if (pressedOnce('Digit1', potionKeyState.hp) && player.hpPotions > 0) {
+      player.hpPotions--;
+      player.hp = Math.min(player.maxHp, player.hp + 40);
+      player.potionCooldown = 20;
+      spawnPotionSparkle('#ff6b5c');
+    } else if (pressedOnce('Digit2', potionKeyState.fp) && player.fpPotions > 0) {
+      player.fpPotions--;
+      player.fp = Math.min(player.maxFp, player.fp + 45);
+      player.potionCooldown = 20;
+      spawnPotionSparkle('#5c9dff');
+    }
   }
 
   if (player.invuln > 0) player.invuln--;
@@ -546,7 +606,7 @@ function updatePlayer() {
     state = 'win';
   }
 }
-const playerKeyState = { attack:{} };
+const potionKeyState = { hp:{}, fp:{} };
 
 // Routes all enemy damage through the shield: blocking cuts damage sharply and
 // chips stamina instead, so timing the block against a telegraphed attack matters.
@@ -562,32 +622,124 @@ function damagePlayer(amount, invulnFrames) {
   player.invuln = invulnFrames || 45;
 }
 
-function attackHitbox() {
+function attackHitbox(reachOverride) {
   const w = player.weapon;
-  const reach = w.range;
+  const reach = reachOverride || w.range;
   const x = player.facing > 0 ? player.x + player.w : player.x - reach;
   return { x, y: player.y - 6, w: reach, h: player.h + 12 };
 }
 
-function resolveAttackHit() {
-  const hb = attackHitbox();
+function resolveAttackHit(dmgOverride, reachOverride) {
+  const hb = attackHitbox(reachOverride);
+  const dmg = dmgOverride != null ? dmgOverride : player.weapon.dmg;
   for (const en of enemies) {
     if (en.dead) continue;
     if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
-      damageEnemy(en, player.weapon.dmg);
+      damageEnemy(en, dmg);
     }
   }
 }
 
-function damageEnemiesInBreath() {
-  const reach = 130;
-  const x = player.facing > 0 ? player.x + player.w : player.x - reach;
-  const hb = {x, y: player.y - 10, w: reach, h: player.h + 20};
+// Sword special: hits everything in a radius around the player instead of a forward reach.
+function resolveSpecialAoeHit(dmg, radius) {
+  const cx = player.x + player.w/2, cy = player.y + player.h/2;
   for (const en of enemies) {
     if (en.dead) continue;
-    if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
-      damageEnemy(en, 0.6);
+    const ex = en.x + en.w/2, ey = en.y + en.h/2;
+    if (Math.hypot(ex-cx, ey-cy) <= radius) damageEnemy(en, dmg);
+  }
+}
+
+// ---------- Weapon specials (long-press attack) ----------
+function startSpecial() {
+  const type = player.weapon.key;
+  player.fp -= player.weapon.specialCost;
+  player.specialCooldown = player.weapon.specialCooldown;
+  player.specialType = type;
+  player.attacking = true;
+
+  if (type === 'sword') {
+    player.specialTimer = 26;
+  } else if (type === 'hammer') {
+    player.specialTimer = 1;
+    player.hammerThrow = {
+      x: player.x + player.w/2, y: player.y + player.h/2 - 4,
+      vx: player.facing * 7.5,
+      dist: 0, maxDist: 230, returning: false,
+      hitSet: new Set()
+    };
+  } else if (type === 'spear') {
+    player.specialTimer = 44;
+  }
+}
+
+function updateSpecial() {
+  if (!player.specialType) return;
+  const type = player.specialType;
+
+  if (type === 'sword') {
+    player.specialTimer--;
+    if (player.specialTimer === 16) {
+      resolveSpecialAoeHit(player.weapon.dmg * 1.4, 62);
     }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'hammer') {
+    updateHammerThrow();
+  } else if (type === 'spear') {
+    player.specialTimer--;
+    if ([38, 30, 22, 14, 6].includes(player.specialTimer)) {
+      resolveAttackHit(player.weapon.dmg * 0.75, player.weapon.range + 8);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  }
+}
+
+function checkHammerHits(h) {
+  const hb = {x: h.x-18, y: h.y-18, w:36, h:36};
+  for (const en of enemies) {
+    if (en.dead || h.hitSet.has(en)) continue;
+    if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
+      damageEnemy(en, player.weapon.dmg * 1.1);
+      h.hitSet.add(en);
+    }
+  }
+}
+
+function updateHammerThrow() {
+  const h = player.hammerThrow;
+  if (!h) { player.specialType = null; return; }
+  const speed = 7.5;
+  if (!h.returning) {
+    h.x += h.vx;
+    h.dist += Math.abs(h.vx);
+    checkHammerHits(h);
+    if (h.dist >= h.maxDist) h.returning = true;
+  } else {
+    const dx = (player.x + player.w/2) - h.x;
+    const dy = (player.y + player.h/2 - 4) - h.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    h.x += dx/dist * speed;
+    h.y += dy/dist * speed;
+    checkHammerHits(h);
+    if (dist < 16) {
+      player.hammerThrow = null;
+      player.specialType = null;
+      player.attacking = false;
+    }
+  }
+}
+
+function spawnPotionSparkle(color) {
+  for (let i = 0; i < 12; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    addParticle({type:'spark', x:player.x+player.w/2, y:player.y+player.h/2,
+      vx:Math.cos(ang)*2.2, vy:Math.sin(ang)*2.2-1.5, life:26, maxLife:26, size:2.5+Math.random()*2.5, color});
   }
 }
 
@@ -704,7 +856,6 @@ function updateEnemies() {
 function updateParticles() {
   for (const p of particles) {
     p.x += p.vx; p.y += p.vy;
-    if (p.type === 'flame') p.vy += 0.05;
     p.life--;
   }
   particles = particles.filter(p => p.life > 0);
@@ -727,6 +878,29 @@ function drawBar(x, y, w, h, pct, colorFill, colorBg, label) {
   }
 }
 
+function drawFlaskIcon(x, y, color, count, keyLabel) {
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  roundRect(ctx, x, y, 18, 20, 4);
+  ctx.fill();
+  const fillH = count > 0 ? 14 : 0;
+  ctx.fillStyle = count > 0 ? color : 'rgba(255,255,255,0.15)';
+  roundRect(ctx, x+2, y+18-fillH, 14, fillH, 3);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, x, y, 18, 20, 4);
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText(`x${count}`, x+24, y+15);
+  if (keyLabel) {
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '9px sans-serif';
+    ctx.fillText(keyLabel, x+2, y-3);
+  }
+}
+
 function drawHUD() {
   drawBar(56, 16, 180, 16, player.hp/player.maxHp, '#e0453f', 'rgba(60,10,10,0.7)', 'HP');
   drawBar(56, 38, 180, 14, player.fp/player.maxFp, '#3f7fe0', 'rgba(10,20,60,0.7)', 'FP');
@@ -745,6 +919,10 @@ function drawHUD() {
   ctx.font = '13px sans-serif';
   ctx.fillStyle = '#fff';
   ctx.fillText('武器: ' + player.weapon.name, 56, 90);
+
+  // potion flasks, below the bars and clear of the top hint text: top = HP recovery, bottom = FP recovery
+  drawFlaskIcon(160, 78, '#ff6b5c', player.hpPotions, '1');
+  drawFlaskIcon(160, 104, '#5c9dff', player.fpPotions, '2');
 }
 
 function drawDragon(p) {
@@ -860,6 +1038,19 @@ function drawDragon(p) {
     drawWeaponSprite(p);
   }
 
+  // whirl-slash sweep trail for the sword special
+  if (p.specialType === 'sword') {
+    const t = 1 - p.specialTimer / 26;
+    ctx.save();
+    ctx.globalAlpha = 0.55 * (1 - t);
+    ctx.strokeStyle = '#dfe8f0';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 34, 0, Math.PI * 2 * t);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   ctx.restore();
 }
 
@@ -891,8 +1082,17 @@ function drawShieldSprite(p) {
 
 function drawWeaponSprite(p) {
   const w = p.weapon;
+  if (w.key === 'hammer' && p.hammerThrow) return; // the hammer is drawn as a flying projectile elsewhere
+
   let angle = -0.4;
-  if (p.attackWindup > 0) {
+  if (p.specialType === 'sword') {
+    const t = 1 - p.specialTimer / 26;
+    angle = t * Math.PI * 2.4; // fast full spin for the whirl slash
+  } else if (p.specialType === 'spear') {
+    const t = 1 - p.specialTimer / 44;
+    const cyc = (t * 5) % 1; // 5 quick thrust/retract cycles
+    angle = cyc < 0.4 ? -0.9 + (cyc/0.4) * 1.5 : 0.6 - ((cyc-0.4)/0.6) * 1.5;
+  } else if (p.attackWindup > 0) {
     const t = 1 - p.attackWindup / w.windup;
     angle = -0.9 + t * 1.6;
   } else if (p.attacking) {
@@ -1112,21 +1312,10 @@ function drawParticles() {
   for (const p of particles) {
     const a = p.life / p.maxLife;
     ctx.globalAlpha = a;
-    if (p.type === 'flame') {
-      const grad = ctx.createRadialGradient(p.x-camera.x, p.y, 0, p.x-camera.x, p.y, p.size);
-      grad.addColorStop(0, '#fff2b0');
-      grad.addColorStop(0.5, '#ff9d3c');
-      grad.addColorStop(1, 'rgba(255,60,20,0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(p.x-camera.x, p.y, p.size, 0, Math.PI*2);
-      ctx.fill();
-    } else {
-      ctx.fillStyle = p.color || '#ffdd88';
-      ctx.beginPath();
-      ctx.arc(p.x-camera.x, p.y, p.size, 0, Math.PI*2);
-      ctx.fill();
-    }
+    ctx.fillStyle = p.color || '#ffdd88';
+    ctx.beginPath();
+    ctx.arc(p.x-camera.x, p.y, p.size, 0, Math.PI*2);
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
 }
@@ -1235,6 +1424,7 @@ function render() {
   }
 
   drawProjectiles();
+  drawHammerThrow();
 
   ctx.save();
   ctx.translate(-camera.x, 0);
@@ -1303,6 +1493,10 @@ function renderMenu() {
     // rating bars
     drawRating(x+40, y+200, '速度', w.speedRating, 3, '#4fd15b');
     drawRating(x+40, y+230, '傷害', w.dmgRating, 3, '#e0453f');
+
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = 'rgba(160,200,255,0.85)';
+    ctx.fillText(`長按攻擊鍵＝${w.specialName}（耗${w.specialCost} FP）`, x+cw/2, y+254);
 
     if (selected) {
       ctx.fillStyle = '#4CC15A';
