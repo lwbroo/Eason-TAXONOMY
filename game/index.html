@@ -228,19 +228,23 @@ const WEAPONS = {
 const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the special instead of a tap
 
 // ---------- Game state ----------
-let state = 'menu'; // menu -> playing -> win -> lose
+let state = 'menu'; // menu -> playing -> lose
+let overlay = null;  // null | 'shop' | 'quest' - modal UI shown over the village
 let selectedWeapon = 'sword';
 let levelTimeLeft = 130 * 60; // frames (~130s at 60fps)
 let frame = 0;
 
 const camera = { x: 0 };
-const LEVEL_WIDTH = 3000;
 const GROUND_Y = 520;
+let LEVEL_WIDTH = 3000;
+let currentLevelId = 'redmoon';
 
 // Platforms laid out to mirror the drawing: stepped blocks with gaps, a floating
 // platform mid-level (validated jumpable with the current jump power), ending on a
-// wide final platform where the portal to the village stands.
-const platforms = [
+// wide final platform where the portal to the village stands. Every adventure level
+// (village excepted) reuses this exact shape - only the enemies and colors change -
+// so the jump timing stays whatever was already validated for the first level.
+const ADVENTURE_PLATFORMS = [
   {x:0,    y:GROUND_Y, w:300, h:80},
   {x:380,  y:GROUND_Y, w:170, h:80},
   {x:640,  y:GROUND_Y, w:210, h:80},
@@ -250,6 +254,15 @@ const platforms = [
   {x:1830, y:GROUND_Y, w:260, h:80},
   {x:2190, y:GROUND_Y, w:810, h:80}
 ];
+// The village is one flat, safe walkway - no gaps, no enemies.
+const VILLAGE_WIDTH = 1500;
+const VILLAGE_PLATFORMS = [
+  {x:0, y:GROUND_Y, w:VILLAGE_WIDTH, h:80}
+];
+const VILLAGE_SHOP_X = 480;
+const VILLAGE_TREE_X = 940;
+
+let platforms = ADVENTURE_PLATFORMS;
 
 function groundHeightAt(x) {
   for (const p of platforms) {
@@ -324,37 +337,122 @@ function buyShopItem(id) {
 }
 
 // ---------- Enemies ----------
+// Every themed level's monsters are one of two shared behavior archetypes, just
+// reskinned and re-statted: "ground" patrols its spawn platform and telegraphs an
+// attack (melee bump or a thrown projectile); "flyer" hovers and either dives into
+// melee or casts a projectile from range. Bosses are a bigger, tougher instance of
+// either archetype that also fires an extra AoE burst attack periodically.
 let enemies = [];
-function spawnLevel1Enemies() {
-  enemies = [
-    makeBombBot(700, GROUND_Y),
-    makeDrone(1050, GROUND_Y-220),
-    makeBombBot(1620, GROUND_Y),
-    makeDrone(1950, GROUND_Y-200),
-    makeBombBot(2260, GROUND_Y),
-    makeDrone(2500, GROUND_Y-180)
-  ];
+function spawnEnemiesForLevel(id) {
+  const def = LEVEL_DEFS[id];
+  enemies = def.makeEnemies ? def.makeEnemies() : [];
 }
-function makeBombBot(x, groundY) {
+
+function makeGroundEnemy(x, groundY, cfg) {
+  const w = cfg.w || 38, h = cfg.h || 40;
   // Patrol range is clamped to the platform it spawns on, so it turns around at the
   // edge instead of walking straight out over a gap.
   const home = platforms.find(p => x >= p.x && x <= p.x + p.w) || {x:0, w:LEVEL_WIDTH};
   return {
-    type:'bomb', x, y:groundY-40, w:38, h:40, vx:0, vy:0,
-    hp:80, maxHp:80, dmg:12, speed:0.55, dir: -1,
-    homeMinX: home.x, homeMaxX: home.x + home.w - 38,
+    type:'bomb', kind: cfg.kind, name: cfg.name || '', isBoss: !!cfg.isBoss,
+    x, y:groundY-h, w, h, vx:0, vy:0,
+    hp:cfg.hp, maxHp:cfg.hp, dmg:cfg.dmg, speed:cfg.speed, dir:-1,
+    homeMinX: home.x, homeMaxX: home.x + home.w - w,
     onGround:true, hitFlash:0, exploding:false, explodeTimer:0,
-    attackCooldown:0, telegraph:false, attackWindup:0, dead:false, groundY
+    attackCooldown:0, telegraph:false, attackWindup:0, dead:false, groundY,
+    attackMode: cfg.attackMode || 'ranged',
+    projectileKind: cfg.projectileKind || 'bomb',
+    colorMain: cfg.colorMain || '#3a3a44', colorAccent: cfg.colorAccent || '#e8e8ee',
+    bossBurstCooldown: 0
   };
 }
-function makeDrone(x, y) {
+
+function makeFlyingEnemy(x, y, cfg) {
+  const w = cfg.w || 34, h = cfg.h || 26;
   return {
-    type:'drone', x, y, baseY:y, w:34, h:26, vx:0, vy:0,
-    hp:24, maxHp:24, dmg:14, speed:1.6, dir:-1,
+    type:'drone', kind: cfg.kind, name: cfg.name || '', isBoss: !!cfg.isBoss,
+    x, y, baseY:y, w, h, vx:0, vy:0,
+    hp:cfg.hp, maxHp:cfg.hp, dmg:cfg.dmg, speed:cfg.speed, dir:-1,
     hitFlash:0, attackCooldown:0, dead:false, phase:Math.random()*Math.PI*2,
-    dashTimer:0, dashing:false, dashDir:0, charging:false, chargeTimer:0
+    dashTimer:0, dashing:false, dashDir:0, charging:false, chargeTimer:0,
+    attackMode: cfg.attackMode || 'dash',
+    projectileKind: cfg.projectileKind || 'bomb',
+    colorMain: cfg.colorMain || '#555c66', colorAccent: cfg.colorAccent || '#e8453f',
+    bossBurstCooldown: 0
   };
 }
+
+// ---------- Level roster ----------
+// Every adventure level reuses ADVENTURE_PLATFORMS (validated jump geometry) and
+// just swaps its enemy roster, background palette, and "focal" backdrop object.
+const LEVEL_DEFS = {
+  redmoon: {
+    name: '紅月遺跡', isVillage: false,
+    theme: { sky1:'#2c2050', sky2:'#553a72', sky3:'#caa2c4', hill:'#3c2b57', focal:'moon' },
+    makeEnemies: () => [
+      makeGroundEnemy(700, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
+      makeFlyingEnemy(1050, GROUND_Y-220, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
+      makeGroundEnemy(1620, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
+      makeFlyingEnemy(1950, GROUND_Y-200, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
+      makeGroundEnemy(2260, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
+      makeFlyingEnemy(2500, GROUND_Y-180, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' })
+    ]
+  },
+  volcano: {
+    name: '火山關卡', isVillage: false,
+    grunts: ['熔岩怪', '火焰法師'], bossName: '熔岩土龍',
+    theme: { sky1:'#3a1408', sky2:'#7a2c10', sky3:'#e8813a', hill:'#4a1c0c', focal:'volcano' },
+    makeEnemies: () => [
+      makeGroundEnemy(700, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
+      makeFlyingEnemy(1050, GROUND_Y-220, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+      makeGroundEnemy(1620, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
+      makeFlyingEnemy(1950, GROUND_Y-200, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:64, h:68, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a' })
+    ]
+  },
+  ocean: {
+    name: '海底關卡', isVillage: false,
+    grunts: ['寄居蟹怪', '大章魚'], bossName: '深海龍王',
+    theme: { sky1:'#0a2440', sky2:'#0f4d6b', sky3:'#7fc9d6', hill:'#0d3550', focal:'bubble' },
+    makeEnemies: () => [
+      makeGroundEnemy(700, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
+      makeFlyingEnemy(1050, GROUND_Y-220, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+      makeGroundEnemy(1620, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
+      makeFlyingEnemy(1950, GROUND_Y-200, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+      makeFlyingEnemy(2750, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:56, h:46, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff' })
+    ]
+  },
+  sky: {
+    name: '天空關卡', isVillage: false,
+    grunts: ['極速燕子', '貓頭鷹伯爵'], bossName: '飛龍亞基爾',
+    theme: { sky1:'#1a3a6e', sky2:'#4c78c0', sky3:'#dcefff', hill:'#2e4f86', focal:'cloud' },
+    makeEnemies: () => [
+      makeFlyingEnemy(700, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:2.1, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
+      makeFlyingEnemy(1050, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+      makeFlyingEnemy(1620, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:2.1, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
+      makeFlyingEnemy(1950, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+      makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:58, h:48, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff' })
+    ]
+  },
+  jungle: {
+    name: '叢林關卡', isVillage: false,
+    grunts: ['藤蔓怪', '潛伏藤蔓'], bossName: '草神狼',
+    theme: { sky1:'#0f2e14', sky2:'#1f5c2a', sky3:'#a8d98a', hill:'#173d1e', focal:'canopy' },
+    makeEnemies: () => [
+      makeGroundEnemy(680, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
+      makeGroundEnemy(780, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a' }),
+      makeGroundEnemy(1550, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
+      makeGroundEnemy(1650, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a' }),
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:62, h:50, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0' })
+    ]
+  },
+  village: {
+    name: '村莊', isVillage: true,
+    theme: { sky1:'#2c2050', sky2:'#553a72', sky3:'#caa2c4', hill:'#3c2b57', focal:'moon' },
+    makeEnemies: () => []
+  }
+};
+const QUEST_LEVEL_IDS = ['volcano', 'ocean', 'sky', 'jungle'];
 
 // ---------- Coins ----------
 const COIN_VALUE = 5;
@@ -404,18 +502,29 @@ function drawCoins() {
 let particles = [];
 function addParticle(p) { particles.push(p); }
 
-// ---------- Projectiles (bombs thrown by bomb bots) ----------
+// ---------- Projectiles (thrown or cast by enemies) ----------
 let projectiles = [];
-function throwBomb(en) {
-  projectiles.push({
-    x: en.x + en.w/2, y: en.y + en.h/2 - 12,
-    vx: en.dir * 4.6, vy: -8.6,
-    r: 6, life: 150, dmg: en.dmg
-  });
+function spawnProjectile(x, y, vx, vy, dmg, kind) {
+  projectiles.push({ x, y, vx, vy, r: 6, life: 150, dmg, kind: kind || 'bomb' });
 }
+function throwBomb(en) {
+  spawnProjectile(en.x + en.w/2, en.y + en.h/2 - 12, en.dir * 4.6, -8.6, en.dmg, en.projectileKind);
+}
+function spawnCastProjectile(en, dirX, dirY) {
+  const speed = 5.5;
+  spawnProjectile(en.x + en.w/2, en.y + en.h/2, dirX*speed, dirY*speed, en.dmg, en.projectileKind);
+}
+const PROJECTILE_PALETTE = {
+  lava:     { c1:'#ffd35c', c2:'#ff5a3c' },
+  fireball: { c1:'#ffe08a', c2:'#ff3b1a' },
+  ink:      { c1:'#c9a2ff', c2:'#3a1f5c' },
+  thorn:    { c1:'#c8f08a', c2:'#3d7a2a' },
+  feather:  { c1:'#fff3d6', c2:'#a9793f' },
+  wind:     { c1:'#e8f6ff', c2:'#7fb8dd' }
+};
 function updateProjectiles() {
   for (const b of projectiles) {
-    b.vy += GRAVITY * 0.65; // a floatier lob than the player's own gravity
+    if (b.kind === 'bomb' || b.kind === 'lava') b.vy += GRAVITY * 0.65; // lobbed arc, others fly straight
     b.x += b.vx;
     b.y += b.vy;
     b.life--;
@@ -436,16 +545,25 @@ function drawProjectiles() {
     ctx.save();
     ctx.translate(b.x - camera.x, b.y);
     ctx.rotate(frame * 0.25);
-    ctx.fillStyle = '#2b2b33';
-    ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI*2); ctx.fill();
-    ctx.strokeStyle = '#c9a24a';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, -b.r);
-    ctx.quadraticCurveTo(4, -b.r-6, 2, -b.r-9);
-    ctx.stroke();
-    ctx.fillStyle = frame % 10 < 5 ? '#ff5a3c' : '#ffcf4a';
-    ctx.beginPath(); ctx.arc(2, -b.r-10, 2, 0, Math.PI*2); ctx.fill();
+    if (b.kind === 'bomb') {
+      ctx.fillStyle = '#2b2b33';
+      ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#c9a24a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -b.r);
+      ctx.quadraticCurveTo(4, -b.r-6, 2, -b.r-9);
+      ctx.stroke();
+      ctx.fillStyle = frame % 10 < 5 ? '#ff5a3c' : '#ffcf4a';
+      ctx.beginPath(); ctx.arc(2, -b.r-10, 2, 0, Math.PI*2); ctx.fill();
+    } else {
+      const pal = PROJECTILE_PALETTE[b.kind] || PROJECTILE_PALETTE.fireball;
+      const grad = ctx.createRadialGradient(0, 0, 1, 0, 0, b.r+3);
+      grad.addColorStop(0, pal.c1);
+      grad.addColorStop(1, pal.c2);
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(0, 0, b.r+3, 0, Math.PI*2); ctx.fill();
+    }
     ctx.restore();
   }
 }
@@ -503,21 +621,46 @@ canvas.addEventListener('click', (e) => {
         startGame(key);
       }
     });
-  } else if (state === 'village') {
+  } else if (overlay === 'shop') {
     for (const card of villageCardRects) {
       if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
         buyShopItem(card.id);
       }
     }
+  } else if (overlay === 'quest') {
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        enterLevel(card.id);
+      }
+    }
   }
 });
 
+// Full fresh run: resets every stat and shop purchase, then loads the first level.
 function startGame(weaponKey) {
   selectedWeapon = weaponKey;
   player.weapon = WEAPONS[weaponKey];
-  player.x = 60; player.y = GROUND_Y-60; player.vx=0; player.vy=0;
   player.maxHp = 100; player.maxHpPotions = 3; player.maxFpPotions = 3;
+  player.gold = 0;
+  player.weaponDmgBonus = 0;
+  player.shopLevels = { weapon:0, armor:0, hpflask:0, fpflask:0 };
+  frame = 0;
+  enterLevel('redmoon');
+}
+
+// Load a level's geometry/enemies and place the player at its start. Called both for
+// the first level and every time a portal or quest sends the player somewhere new -
+// gold, shop levels, and weapon bonuses are NOT touched here, only startGame() resets those.
+function enterLevel(levelId) {
+  const def = LEVEL_DEFS[levelId];
+  currentLevelId = levelId;
+  platforms = def.isVillage ? VILLAGE_PLATFORMS : ADVENTURE_PLATFORMS;
+  LEVEL_WIDTH = def.isVillage ? VILLAGE_WIDTH : ADVENTURE_PLATFORMS[ADVENTURE_PLATFORMS.length-1].x + ADVENTURE_PLATFORMS[ADVENTURE_PLATFORMS.length-1].w;
+
+  player.x = 60; player.y = GROUND_Y-60; player.vx=0; player.vy=0;
   player.hp = player.maxHp; player.fp = player.maxFp; player.sta = player.maxSta;
+  player.hpPotions = player.maxHpPotions;
+  player.fpPotions = player.maxFpPotions;
   player.dead = false;
   player.lastGroundX = player.x;
   player.lastGroundY = player.y;
@@ -527,25 +670,22 @@ function startGame(weaponKey) {
   player.specialTimer = 0;
   player.specialPhase = 0;
   player.hammerThrow = null;
-  player.hpPotions = player.maxHpPotions;
-  player.fpPotions = player.maxFpPotions;
   player.potionCooldown = 0;
-  player.gold = 0;
-  player.weaponDmgBonus = 0;
-  player.shopLevels = { weapon:0, armor:0, hpflask:0, fpflask:0 };
   camera.x = 0;
-  levelTimeLeft = 130*60;
-  frame = 0;
-  spawnLevel1Enemies();
-  spawnCoins();
+  levelTimeLeft = def.isVillage ? Infinity : 130*60;
+  overlay = null;
+  spawnEnemiesForLevel(levelId);
+  if (!def.isVillage) spawnCoins(); else coins = [];
   particles = [];
   projectiles = [];
   state = 'playing';
 }
 
 // ---------- Update: Player ----------
+let villageJumpPrev = false;
 function updatePlayer() {
   if (player.dead) return;
+  if (overlay) return; // frozen while a village shop/quest modal is open
 
   player.blocking = !!keys['KeyL'] && player.attackWindup === 0 && !player.attacking;
 
@@ -565,10 +705,19 @@ function updatePlayer() {
   player.vx *= player.onGround ? GROUND_FRICTION : 0.95;
 
   // jump
-  if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
+  const jumpDown = !!(keys['Space'] || keys['ArrowUp'] || keys['KeyW']);
+  const wasOnGround = player.onGround;
+  if (jumpDown && wasOnGround) {
     player.vy = -13.2;
     player.onGround = false;
   }
+  // in the village, pressing jump near the shop or the tree opens that modal instead
+  if (currentLevelId === 'village' && jumpDown && !villageJumpPrev && wasOnGround) {
+    const px = player.x + player.w/2;
+    if (Math.abs(px - VILLAGE_SHOP_X) < 70) overlay = 'shop';
+    else if (Math.abs(px - VILLAGE_TREE_X) < 70) overlay = 'quest';
+  }
+  villageJumpPrev = jumpDown;
 
   player.vy += GRAVITY;
   player.x += player.vx;
@@ -675,9 +824,9 @@ function updatePlayer() {
     setTimeout(()=>{ if (state==='playing') state = 'lose'; }, 600);
   }
 
-  // reach the portal -> travel to the village
-  if (player.x > LEVEL_WIDTH - 160 && state === 'playing') {
-    state = 'village';
+  // reach the portal -> travel back to the village
+  if (!LEVEL_DEFS[currentLevelId].isVillage && player.x > LEVEL_WIDTH - 160) {
+    enterLevel('village');
   }
 
   updateCoins();
@@ -830,6 +979,8 @@ function damageEnemy(en, dmg) {
     if (en.type === 'bomb') {
       en.exploding = true;
       en.explodeTimer = 30;
+      en.explodeRadius = en.isBoss ? 130 : 90;
+      en.explodeDmg = en.isBoss ? 22 : 14;
     } else {
       for (let i=0;i<10;i++) {
         addParticle({type:'spark', x:en.x+en.w/2, y:en.y+en.h/2,
@@ -850,7 +1001,7 @@ function updateEnemies() {
       if (en.type === 'bomb' && en.exploding) {
         en.explodeTimer--;
         if (en.explodeTimer === 6) {
-          explodeAt(en.x+en.w/2, en.y+en.h/2, 90, 14);
+          explodeAt(en.x+en.w/2, en.y+en.h/2, en.explodeRadius || 90, en.explodeDmg || 14);
         }
       }
       continue;
@@ -859,12 +1010,14 @@ function updateEnemies() {
 
     if (en.type === 'bomb') {
       const dx = player.x - en.x;
-      const inThrowRange = Math.abs(dx) < 360 && Math.abs(player.y - en.y) < 110;
+      const range = en.isBoss ? 440 : 360;
+      const inRange = Math.abs(dx) < range && Math.abs(player.y - en.y) < 110;
+      const closeGap = en.attackMode === 'melee' ? 30 : 160;
       // walk back and forth, face and approach the player if in range - frozen during its telegraph wind-up
       if (!en.telegraph) {
-        if (inThrowRange) {
+        if (inRange) {
           en.dir = dx > 0 ? 1 : -1;
-          if (Math.abs(dx) > 160) en.x += en.dir * en.speed;
+          if (Math.abs(dx) > closeGap) en.x += en.dir * en.speed;
         } else if (frame % 90 === 0) {
           en.dir *= -1;
         } else {
@@ -877,17 +1030,26 @@ function updateEnemies() {
       en.y = en.groundY - en.h;
 
       if (en.attackCooldown > 0) en.attackCooldown--;
-      if (!en.telegraph && inThrowRange && en.attackCooldown<=0) {
+      if (!en.telegraph && inRange && en.attackCooldown<=0) {
         en.telegraph = true;
-        en.attackWindup = 30; // wind-up (arm raised) before the throw
         en.dir = dx > 0 ? 1 : -1;
+        // bosses use every 3rd attack for a longer-telegraphed AoE burst instead of their normal hit
+        en.atkCount = (en.atkCount || 0) + 1;
+        en.burst = en.isBoss && (en.atkCount % 3 === 0);
+        en.attackWindup = en.burst ? 50 : 30;
       }
       if (en.telegraph) {
         en.attackWindup--;
         if (en.attackWindup <= 0) {
           en.telegraph = false;
-          en.attackCooldown = 110;
-          throwBomb(en);
+          en.attackCooldown = en.burst ? 160 : 110;
+          if (en.burst) {
+            explodeAt(en.x+en.w/2, en.y+en.h/2, 100, en.dmg*1.6);
+          } else if (en.attackMode === 'melee') {
+            if (rectsOverlap(en, player)) damagePlayer(en.dmg);
+          } else {
+            throwBomb(en);
+          }
         }
       }
     } else if (en.type === 'drone') {
@@ -895,14 +1057,21 @@ function updateEnemies() {
       const dx = player.x - en.x;
       const dy = player.y - en.y;
       const dist = Math.hypot(dx,dy);
+      const engageDist = en.isBoss ? 360 : 300;
 
       if (en.charging) {
         en.chargeTimer--;
         if (en.chargeTimer <= 0) {
           en.charging = false;
-          en.dashing = true;
-          const len = Math.hypot(dx,dy) || 1;
-          en.dashDirX = dx/len; en.dashDirY = dy/len;
+          if (en.attackMode === 'cast') {
+            const len = Math.hypot(dx,dy) || 1;
+            spawnCastProjectile(en, dx/len, dy/len);
+            en.attackCooldown = en.isBoss ? 130 : 90;
+          } else {
+            en.dashing = true;
+            const len = Math.hypot(dx,dy) || 1;
+            en.dashDirX = dx/len; en.dashDirY = dy/len;
+          }
         }
       } else if (!en.dashing) {
         en.y = en.baseY + Math.sin(en.phase)*14;
@@ -910,9 +1079,9 @@ function updateEnemies() {
           en.x += Math.sign(dx) * en.speed * 0.6;
         }
         en.dashTimer++;
-        if (en.dashTimer > 110 && dist < 300) {
+        if (en.dashTimer > 110 && dist < engageDist && en.attackCooldown<=0) {
           en.charging = true;
-          en.chargeTimer = 20; // ~0.33s wind-up flash before the dive
+          en.chargeTimer = 20; // ~0.33s wind-up flash before the dive/cast
           en.dashTimer = 0;
         }
       } else {
@@ -924,7 +1093,7 @@ function updateEnemies() {
       en.x = Math.max(0, Math.min(LEVEL_WIDTH - en.w, en.x));
 
       if (en.attackCooldown > 0) en.attackCooldown--;
-      if (!en.charging && rectsOverlap(en, player) && en.attackCooldown<=0) {
+      if (!en.charging && en.attackMode !== 'cast' && rectsOverlap(en, player) && en.attackCooldown<=0) {
         damagePlayer(en.dmg);
         en.attackCooldown = en.dashing ? 30 : 50;
       }
@@ -985,13 +1154,15 @@ function drawHUD() {
   drawBar(56, 38, 180, 14, player.fp/player.maxFp, '#3f7fe0', 'rgba(10,20,60,0.7)', 'FP');
   drawBar(56, 58, 180, 12, player.sta/player.maxSta, '#4fd15b', 'rgba(10,40,10,0.7)', '耐力');
 
-  // timer top-right, echoing the "1:00" in the drawing
-  const secs = Math.max(0, Math.ceil(levelTimeLeft/60));
-  const mm = Math.floor(secs/60), ss = secs%60;
+  // timer top-right, echoing the "1:00" in the drawing - the village has no timer
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 20px sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText(`${mm}:${ss.toString().padStart(2,'0')}`, W-24, 34);
+  if (isFinite(levelTimeLeft)) {
+    const secs = Math.max(0, Math.ceil(levelTimeLeft/60));
+    const mm = Math.floor(secs/60), ss = secs%60;
+    ctx.fillText(`${mm}:${ss.toString().padStart(2,'0')}`, W-24, 34);
+  }
   ctx.font = 'bold 15px sans-serif';
   ctx.fillStyle = '#f5c542';
   ctx.fillText(`金幣 ${player.gold}`, W-24, 58);
@@ -1232,116 +1403,178 @@ function drawAttackTelegraph(cx, cy, radius) {
   ctx.textAlign = 'left';
 }
 
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.slice(1), 16);
+  let r = Math.max(0, Math.min(255, (num >> 16) + Math.round(2.55*percent)));
+  let g = Math.max(0, Math.min(255, ((num >> 8) & 0xff) + Math.round(2.55*percent)));
+  let b = Math.max(0, Math.min(255, (num & 0xff) + Math.round(2.55*percent)));
+  return `rgb(${r},${g},${b})`;
+}
+
 function drawBombBot(en) {
+  const maxWindup = en.burst ? 50 : 30;
   if (en.exploding) {
     const warnPct = en.explodeTimer / 30;
-    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, 14 + (1-warnPct) * 76);
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, 14 + (1-warnPct) * (en.explodeRadius || 76));
   } else if (en.telegraph) {
-    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, 22);
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, en.isBoss ? 34 : 22);
   }
   ctx.save();
   ctx.translate(en.x, en.y);
   if (en.hitFlash > 0) ctx.filter = 'brightness(2)';
 
+  const bodyR = en.w/2 - 2;
+  const cx = en.w/2, cy = en.h/2 + en.h*0.1;
+
   // legs
-  ctx.fillStyle = '#26262c';
-  roundRect(ctx, en.w/2-11, en.h-8, 7, 12, 2); ctx.fill();
-  roundRect(ctx, en.w/2+4, en.h-8, 7, 12, 2); ctx.fill();
-  ctx.fillStyle = '#1c1c22';
-  roundRect(ctx, en.w/2-13, en.h+1, 10, 4, 2); ctx.fill();
-  roundRect(ctx, en.w/2+3, en.h+1, 10, 4, 2); ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, -30);
+  roundRect(ctx, cx-en.w*0.29, en.h-8, en.w*0.18, 12, 2); ctx.fill();
+  roundRect(ctx, cx+en.w*0.11, en.h-8, en.w*0.18, 12, 2); ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, -50);
+  roundRect(ctx, cx-en.w*0.34, en.h+1, en.w*0.26, 4, 2); ctx.fill();
+  roundRect(ctx, cx+en.w*0.08, en.h+1, en.w*0.26, 4, 2); ctx.fill();
 
-  // resting arm, tucked mostly behind the round torso on the side opposite the throw
-  ctx.fillStyle = '#3a3a44';
-  roundRect(ctx, en.w/2 + (-en.dir)*17 - 4, en.h/2-2, 8, 13, 3); ctx.fill();
+  // resting arm, tucked mostly behind the round torso on the side opposite the attack
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx + (-en.dir)*bodyR*0.7 - 4, en.h/2-2, 8, 13, 3); ctx.fill();
 
-  // body - round bomb-like robot
-  ctx.fillStyle = '#3a3a44';
-  ctx.beginPath();
-  ctx.arc(en.w/2, en.h/2+4, 17, 0, Math.PI*2);
-  ctx.fill();
-  ctx.strokeStyle = '#1c1c22';
+  // body
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath(); ctx.arc(cx, cy, bodyR, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -40);
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.arc(en.w/2, en.h/2+4, 17, 0, Math.PI*2);
-  ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, bodyR, 0, Math.PI*2); ctx.stroke();
 
-  // throwing arm - winds up and back before releasing a bomb
+  // attacking arm - winds up and back before releasing
   ctx.save();
-  ctx.translate(en.w/2 + en.dir*10, en.h/2+2);
+  ctx.translate(cx + en.dir*bodyR*0.6, en.h/2+2);
   let armAngle = en.dir * 0.5;
   if (en.telegraph) {
-    const t = 1 - en.attackWindup / 30;
+    const t = 1 - en.attackWindup / maxWindup;
     armAngle = en.dir * (0.5 - t * 2.1);
   }
   ctx.rotate(armAngle);
-  ctx.fillStyle = '#3a3a44';
+  ctx.fillStyle = en.colorMain;
   roundRect(ctx, -4, 0, 8, 15, 3);
   ctx.fill();
-  if (en.telegraph) {
-    ctx.fillStyle = '#1c1c22';
+  if (en.telegraph && en.attackMode !== 'melee') {
+    ctx.fillStyle = shadeColor(en.colorMain, -50);
     ctx.beginPath(); ctx.arc(0, 17, 5, 0, Math.PI*2); ctx.fill();
-    ctx.strokeStyle = '#c9a24a';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(0, 12); ctx.lineTo(2, 8); ctx.stroke();
   }
   ctx.restore();
 
-  // cross-bolt face like the sketch
-  ctx.strokeStyle = '#e8e8ee';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(en.w/2-8, en.h/2-2); ctx.lineTo(en.w/2+8, en.h/2+10);
-  ctx.moveTo(en.w/2+8, en.h/2-2); ctx.lineTo(en.w/2-8, en.h/2+10);
-  ctx.stroke();
-  // fuse
-  ctx.strokeStyle = '#c9a24a';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(en.w/2, en.h/2-13);
-  ctx.quadraticCurveTo(en.w/2+6, en.h/2-22, en.w/2+2, en.h/2-26);
-  ctx.stroke();
-  ctx.fillStyle = frame%10<5 ? '#ff5a3c' : '#ffcf4a';
-  ctx.beginPath();
-  ctx.arc(en.w/2+2, en.h/2-27, 3, 0, Math.PI*2);
-  ctx.fill();
-  // treads
-  ctx.fillStyle = '#26262c';
+  // face: the classic cross-bolt for the bomb-bot kind, simple monster eyes for everything else
+  if (en.kind === 'bomb') {
+    ctx.strokeStyle = en.colorAccent;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx-8, cy-6); ctx.lineTo(cx+8, cy+6);
+    ctx.moveTo(cx+8, cy-6); ctx.lineTo(cx-8, cy+6);
+    ctx.stroke();
+    ctx.strokeStyle = '#c9a24a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy-bodyR);
+    ctx.quadraticCurveTo(cx+6, cy-bodyR-9, cx+2, cy-bodyR-13);
+    ctx.stroke();
+    ctx.fillStyle = frame%10<5 ? '#ff5a3c' : '#ffcf4a';
+    ctx.beginPath(); ctx.arc(cx+2, cy-bodyR-14, 3, 0, Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillStyle = en.colorAccent;
+    ctx.beginPath(); ctx.arc(cx-6, cy-4, 3.4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx+6, cy-4, 3.4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath(); ctx.arc(cx-6, cy-4, 1.4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx+6, cy-4, 1.4, 0, Math.PI*2); ctx.fill();
+    if (en.kind === 'vine' || en.kind === 'lurkvine') {
+      ctx.fillStyle = shadeColor(en.colorMain, -20);
+      for (const ox of [-8, 0, 8]) {
+        ctx.beginPath();
+        ctx.moveTo(cx+ox-3, cy-bodyR+4); ctx.lineTo(cx+ox+3, cy-bodyR+4); ctx.lineTo(cx+ox, cy-bodyR-6);
+        ctx.fill();
+      }
+    } else if (en.kind === 'shell') {
+      ctx.strokeStyle = shadeColor(en.colorMain, -25);
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy-2, bodyR-4, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
+    } else if (en.kind === 'wolf') {
+      ctx.fillStyle = shadeColor(en.colorMain, -15);
+      ctx.beginPath();
+      ctx.moveTo(cx-bodyR*0.6, cy-bodyR*0.7); ctx.lineTo(cx-bodyR*0.9, cy-bodyR*1.3); ctx.lineTo(cx-bodyR*0.3, cy-bodyR*0.9);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(cx+bodyR*0.6, cy-bodyR*0.7); ctx.lineTo(cx+bodyR*0.9, cy-bodyR*1.3); ctx.lineTo(cx+bodyR*0.3, cy-bodyR*0.9);
+      ctx.fill();
+    }
+  }
+
+  // treads/base
+  ctx.fillStyle = shadeColor(en.colorMain, -35);
   ctx.fillRect(2, en.h-6, en.w-4, 6);
   ctx.restore();
 
-  // hp bar
   drawEnemyHp(en);
 }
 
 function drawDrone(en) {
   if (en.charging) {
-    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, 20);
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, en.isBoss ? 30 : 20);
   }
   ctx.save();
   ctx.translate(en.x, en.y);
   if (en.hitFlash > 0) ctx.filter = 'brightness(2)';
   if (en.charging) ctx.filter = 'brightness(1.6) saturate(1.4)';
-  ctx.fillStyle = '#555c66';
+
+  ctx.fillStyle = en.colorMain;
   roundRect(ctx, 4, 4, en.w-8, en.h-10, 4);
   ctx.fill();
-  ctx.fillStyle = '#e8453f';
+  ctx.fillStyle = en.colorAccent;
   ctx.beginPath();
   ctx.arc(en.w/2, en.h/2, 3, 0, Math.PI*2);
   ctx.fill();
-  // rotor arms
-  ctx.strokeStyle = '#2b2f36';
-  ctx.lineWidth = 2;
-  const spin = (frame*0.9)%(Math.PI*2);
-  [[0,0],[en.w,0],[0,en.h-6],[en.w,en.h-6]].forEach(([ax,ay])=>{
-    ctx.save();
-    ctx.translate(ax, ay);
-    ctx.rotate(spin);
-    ctx.beginPath();
-    ctx.moveTo(-6,0); ctx.lineTo(6,0);
-    ctx.stroke();
+
+  if (en.kind === 'tentacle') {
+    ctx.strokeStyle = en.colorMain;
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 4; i++) {
+      const tx = 6 + i*(en.w-12)/3;
+      const wig = Math.sin(frame*0.15 + i) * 4;
+      ctx.beginPath();
+      ctx.moveTo(tx, en.h-6);
+      ctx.quadraticCurveTo(tx+wig, en.h+6, tx+wig*0.6, en.h+14);
+      ctx.stroke();
+    }
+  } else if (en.kind === 'bird' || en.kind === 'owl' || en.kind === 'dragon') {
+    const flap = Math.sin(frame*0.3) * 0.6;
+    ctx.fillStyle = en.colorAccent;
+    ctx.save(); ctx.translate(2, en.h/2); ctx.rotate(-0.3 - flap);
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-14,-4); ctx.lineTo(-10,6); ctx.fill();
     ctx.restore();
-  });
+    ctx.save(); ctx.translate(en.w-2, en.h/2); ctx.rotate(0.3 + flap);
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(14,-4); ctx.lineTo(10,6); ctx.fill();
+    ctx.restore();
+    if (en.kind === 'owl' || en.kind === 'dragon') {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#3a2a1a';
+      ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
+    }
+  } else {
+    ctx.strokeStyle = shadeColor(en.colorMain, -40);
+    ctx.lineWidth = 2;
+    const spin = (frame*0.9) % (Math.PI*2);
+    [[0,0],[en.w,0],[0,en.h-6],[en.w,en.h-6]].forEach(([ax,ay])=>{
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(spin);
+      ctx.beginPath();
+      ctx.moveTo(-6,0); ctx.lineTo(6,0);
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
   ctx.restore();
 
   drawEnemyHp(en);
@@ -1349,9 +1582,16 @@ function drawDrone(en) {
 
 function drawEnemyHp(en) {
   const bw = en.w;
+  if (en.isBoss && en.name) {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(en.name, en.x + en.w/2, en.y - 16);
+    ctx.textAlign = 'left';
+  }
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(en.x, en.y-10, bw, 5);
-  ctx.fillStyle = en.type==='bomb' ? '#e0453f' : '#e0453f';
+  ctx.fillStyle = '#e0453f';
   ctx.fillRect(en.x, en.y-10, bw * Math.max(0,en.hp/en.maxHp), 5);
 }
 
@@ -1432,44 +1672,101 @@ function drawMoon(cx, cy) {
   }
 }
 
+function drawFocal(kind, cx, cy) {
+  if (kind === 'volcano') {
+    const R = 150;
+    ctx.fillStyle = 'rgba(255,140,60,0.30)';
+    ctx.beginPath(); ctx.arc(cx, cy+40, R*1.3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#2a1710';
+    ctx.beginPath();
+    ctx.moveTo(cx-R*1.1, cy+R*0.9);
+    ctx.lineTo(cx-R*0.3, cy-R*0.9);
+    ctx.lineTo(cx+R*0.3, cy-R*0.9);
+    ctx.lineTo(cx+R*1.1, cy+R*0.9);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ff7a2e';
+    ctx.beginPath(); ctx.ellipse(cx, cy-R*0.85, R*0.28, R*0.12, 0, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,140,50,0.7)';
+    ctx.lineWidth = 4;
+    for (const dx of [-0.15, 0.05, 0.2]) {
+      ctx.beginPath();
+      ctx.moveTo(cx+dx*R, cy-R*0.8);
+      ctx.lineTo(cx+dx*R*1.6, cy+R*0.7);
+      ctx.stroke();
+    }
+  } else if (kind === 'bubble') {
+    const R = 160;
+    const grad = ctx.createRadialGradient(cx, cy, 10, cx, cy, R*1.4);
+    grad.addColorStop(0, 'rgba(180,230,255,0.45)');
+    grad.addColorStop(1, 'rgba(180,230,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy, R*1.4, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 6; i++) {
+      const bx = cx + Math.sin(i*1.7) * R*0.8;
+      const by = ((cy + i*60 - (frame*0.6)%360) % 400) - 200 + cy;
+      ctx.beginPath(); ctx.arc(bx, by, 5 + (i%3)*3, 0, Math.PI*2); ctx.stroke();
+    }
+  } else if (kind === 'cloud') {
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    for (const [ox,oy,r] of [[-70,10,50],[-20,-15,60],[40,0,55],[85,15,40]]) {
+      ctx.beginPath(); ctx.arc(cx+ox, cy+oy, r, 0, Math.PI*2); ctx.fill();
+    }
+  } else if (kind === 'canopy') {
+    ctx.fillStyle = 'rgba(20,60,20,0.55)';
+    for (const [ox,oy,r] of [[-80,-10,70],[-20,-40,80],[50,-15,75],[100,10,55]]) {
+      ctx.beginPath(); ctx.arc(cx+ox, cy+oy, r, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(255,240,180,0.15)';
+    ctx.beginPath(); ctx.arc(cx+20, cy-10, 30, 0, Math.PI*2); ctx.fill();
+  } else {
+    drawMoon(cx, cy);
+  }
+}
+
 function drawBackground() {
-  // sky gradient - same dusk palette the drawing used, as a flat vector wash
+  const theme = (LEVEL_DEFS[currentLevelId] || LEVEL_DEFS.redmoon).theme;
+
+  // sky gradient - flat vector wash, palette swapped per level theme
   const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#2c2050');
-  sky.addColorStop(0.5, '#553a72');
-  sky.addColorStop(1, '#caa2c4');
+  sky.addColorStop(0, theme.sky1);
+  sky.addColorStop(0.5, theme.sky2);
+  sky.addColorStop(1, theme.sky3);
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
 
-  // stars: slow parallax, gentle twinkle
-  const starParX = -camera.x * 0.15;
-  for (let tile = -1; tile <= Math.ceil(W / STAR_TILE) + 1; tile++) {
-    const baseX = (((starParX % STAR_TILE) + STAR_TILE) % STAR_TILE) + tile * STAR_TILE - STAR_TILE;
-    for (const s of stars) {
-      const tw = 0.5 + 0.5 * Math.sin(frame * 0.05 + s.phase);
-      ctx.globalAlpha = 0.25 + 0.55 * tw;
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(baseX + s.x, s.y, s.r, 0, Math.PI*2);
-      ctx.fill();
+  // stars: slow parallax, gentle twinkle - only for the night-sky themes
+  if (theme.focal === 'moon') {
+    const starParX = -camera.x * 0.15;
+    for (let tile = -1; tile <= Math.ceil(W / STAR_TILE) + 1; tile++) {
+      const baseX = (((starParX % STAR_TILE) + STAR_TILE) % STAR_TILE) + tile * STAR_TILE - STAR_TILE;
+      for (const s of stars) {
+        const tw = 0.5 + 0.5 * Math.sin(frame * 0.05 + s.phase);
+        ctx.globalAlpha = 0.25 + 0.55 * tw;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(baseX + s.x, s.y, s.r, 0, Math.PI*2);
+        ctx.fill();
+      }
     }
+    ctx.globalAlpha = 1;
   }
-  ctx.globalAlpha = 1;
 
-  // one big moon per "phase" of the level, drifting slowly behind the action.
-  // World position of moon i is i*moonTile + moonOffset; screen position subtracts
-  // the parallax-scaled camera so it scrolls slower than the foreground.
-  const moonTile = 3000, moonOffset = 460, moonGlow = 213;
-  const moonParX = camera.x * 0.35;
-  const iMin = Math.floor((moonParX - moonGlow - moonOffset) / moonTile);
-  const iMax = Math.ceil((moonParX + W + moonGlow - moonOffset) / moonTile);
+  // one big focal backdrop object per "phase" of the level, drifting slowly behind the action.
+  // World position of instance i is i*tile + offset; screen position subtracts the
+  // parallax-scaled camera so it scrolls slower than the foreground.
+  const focalTile = 3000, focalOffset = 460, focalGlow = 213;
+  const focalParX = camera.x * 0.35;
+  const iMin = Math.floor((focalParX - focalGlow - focalOffset) / focalTile);
+  const iMax = Math.ceil((focalParX + W + focalGlow - focalOffset) / focalTile);
   for (let i = iMin; i <= iMax; i++) {
-    drawMoon(i * moonTile + moonOffset - moonParX, H * 0.32);
+    drawFocal(theme.focal, i * focalTile + focalOffset - focalParX, H * 0.32);
   }
 
   // rolling silhouette hills for a mid-ground layer, same flat-color language as the platforms
   const hillParX = camera.x * 0.55;
-  ctx.fillStyle = '#3c2b57';
+  ctx.fillStyle = theme.hill;
   ctx.beginPath();
   ctx.moveTo(0, H);
   for (let x = 0; x <= W; x += 20) {
@@ -1499,13 +1796,17 @@ function render() {
   ctx.clearRect(0,0,W,H);
 
   if (state === 'menu') { renderMenu(); return; }
-  if (state === 'village') { renderVillage(); return; }
 
+  const levelDef = LEVEL_DEFS[currentLevelId];
   drawBackground();
 
   for (const p of platforms) drawPlatform(p);
-  drawCoins();
-  drawPortal(LEVEL_WIDTH - 80, GROUND_Y);
+  if (levelDef.isVillage) {
+    drawVillageProps();
+  } else {
+    drawCoins();
+    drawPortal(LEVEL_WIDTH - 80, GROUND_Y);
+  }
 
   for (const en of enemies) {
     if (en.dead && !(en.type==='bomb' && en.exploding)) continue;
@@ -1528,6 +1829,8 @@ function render() {
   drawHUD();
 
   if (state === 'lose') renderOverlay('挑戰失敗', '按 R 重新挑戰', '#e0453f');
+  if (overlay === 'shop') renderShopOverlay();
+  if (overlay === 'quest') renderQuestOverlay();
 }
 
 function renderOverlay(title, sub, color) {
@@ -1544,38 +1847,49 @@ function renderOverlay(title, sub, color) {
 }
 
 // ---------- Village ----------
+// The village is a walkable level with no enemies. Walking up to the shop or the big
+// tree and pressing jump opens a modal (`overlay`) on top of the scene; the shop
+// reuses the same purchase system the old full-screen village screen had.
 let villageCardRects = [];
 const villageKeyState = { 1:{}, 2:{}, 3:{}, 4:{} };
+const QUEST_INFO = {
+  volcano: { emoji:'🌋' },
+  ocean:   { emoji:'🌊' },
+  sky:     { emoji:'☁️' },
+  jungle:  { emoji:'🌿' }
+};
 
-function updateVillage() {
+function updateShopOverlay() {
   const digitCodes = ['Digit1','Digit2','Digit3','Digit4'];
   SHOP_ITEMS.forEach((item, i) => {
     if (pressedOnce(digitCodes[i], villageKeyState[i+1])) buyShopItem(item.id);
   });
 }
 
-function renderVillage() {
-  drawBackground();
-  ctx.fillStyle = 'rgba(20,10,30,0.6)';
+function updateQuestOverlay() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4'];
+  QUEST_LEVEL_IDS.forEach((id, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState[i+1])) enterLevel(id);
+  });
+}
+
+function renderShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
   ctx.fillRect(0, 0, W, H);
 
   ctx.textAlign = 'center';
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 32px sans-serif';
-  ctx.fillText('紅月遺跡外圍聚落', W/2, 62);
-  ctx.font = '14px sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.8)';
-  ctx.fillText('你安全抵達村莊！用撿到的金幣補給裝備吧', W/2, 86);
-
-  ctx.font = 'bold 20px sans-serif';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('村莊商店', W/2, 56);
+  ctx.font = 'bold 18px sans-serif';
   ctx.fillStyle = '#f5c542';
-  ctx.fillText(`金幣：${player.gold}`, W/2, 118);
+  ctx.fillText(`金幣：${player.gold}`, W/2, 84);
 
   villageCardRects = [];
   const cw = 200, ch = 190, gap = 20;
   const totalW = SHOP_ITEMS.length * cw + (SHOP_ITEMS.length - 1) * gap;
   const startX = W/2 - totalW/2;
-  const y = 145;
+  const y = 110;
 
   SHOP_ITEMS.forEach((item, i) => {
     const x = startX + i * (cw + gap);
@@ -1619,8 +1933,115 @@ function renderVillage() {
 
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '13px sans-serif';
-  ctx.fillText('R 重新挑戰', W/2, H-30);
+  ctx.fillText('L 離開商店', W/2, H-24);
   ctx.textAlign = 'left';
+}
+
+function renderQuestOverlay() {
+  ctx.fillStyle = 'rgba(10,20,10,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('大樹的任務', W/2, 56);
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText('接下任務，前往關卡冒險吧', W/2, 80);
+
+  villageCardRects = [];
+  const cw = 200, ch = 190, gap = 20;
+  const totalW = QUEST_LEVEL_IDS.length * cw + (QUEST_LEVEL_IDS.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+  const y = 105;
+
+  QUEST_LEVEL_IDS.forEach((id, i) => {
+    const def = LEVEL_DEFS[id];
+    const x = startX + i * (cw + gap);
+    villageCardRects.push({x, y, w:cw, h:ch, id});
+
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.fill();
+    ctx.strokeStyle = '#4CC15A';
+    ctx.lineWidth = 2;
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.stroke();
+
+    ctx.font = '28px sans-serif';
+    ctx.fillText(QUEST_INFO[id].emoji, x+cw/2, y+42);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(def.name, x+cw/2, y+66);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillText('敵人：' + def.grunts.join('、'), x+cw/2, y+90);
+    ctx.fillStyle = '#ff8a6a';
+    ctx.fillText('BOSS：' + def.bossName, x+cw/2, y+108);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊接受`, x+cw/2, y+ch-20);
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('L 離開', W/2, H-24);
+  ctx.textAlign = 'left';
+}
+
+function drawVillageProps() {
+  // shop building
+  ctx.save();
+  ctx.translate(VILLAGE_SHOP_X - camera.x, GROUND_Y);
+  ctx.fillStyle = '#6b4a34';
+  roundRect(ctx, -50, -110, 100, 110, 6); ctx.fill();
+  ctx.fillStyle = '#8a5a3c';
+  ctx.beginPath(); ctx.moveTo(-60,-110); ctx.lineTo(0,-150); ctx.lineTo(60,-110); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#3a2418';
+  roundRect(ctx, -16, -46, 32, 46, 4); ctx.fill();
+  ctx.fillStyle = '#f5c542';
+  roundRect(ctx, -40, -84, 24, 24, 3); ctx.fill();
+  roundRect(ctx, 16, -84, 24, 24, 3); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('商店', 0, -122);
+  ctx.restore();
+
+  // big tree
+  ctx.save();
+  ctx.translate(VILLAGE_TREE_X - camera.x, GROUND_Y);
+  ctx.fillStyle = '#5a3c28';
+  roundRect(ctx, -14, -90, 28, 90, 6); ctx.fill();
+  ctx.fillStyle = '#2f6b34';
+  for (const [ox,oy,r] of [[-40,-130,50],[10,-155,60],[55,-120,45],[0,-95,55]]) {
+    ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.fillStyle = '#f5c542';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('!', 0, -175);
+  ctx.restore();
+  ctx.textAlign = 'left';
+
+  // proximity hints
+  const px = player.x + player.w/2;
+  if (Math.abs(px - VILLAGE_SHOP_X) < 70) drawInteractHint(VILLAGE_SHOP_X, GROUND_Y-160, '按跳躍鍵進入商店');
+  if (Math.abs(px - VILLAGE_TREE_X) < 70) drawInteractHint(VILLAGE_TREE_X, GROUND_Y-200, '按跳躍鍵接取任務');
+}
+
+function drawInteractHint(x, y, text) {
+  ctx.save();
+  ctx.translate(x - camera.x, y);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  const w = ctx.measureText(text).width + 20;
+  roundRect(ctx, -w/2, -22, w, 26, 6);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(text, 0, -4);
+  ctx.restore();
 }
 
 function renderMenu() {
@@ -1723,14 +2144,18 @@ function drawWeaponIcon(key) {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyR' && (state === 'lose' || state === 'village')) {
+  if (e.code === 'KeyR' && state === 'lose') {
     state = 'menu';
+  }
+  if ((e.code === 'KeyL' || e.code === 'Escape') && overlay) {
+    overlay = null;
   }
 });
 
 function loop() {
   if (state === 'menu') updateMenu();
-  if (state === 'village') updateVillage();
+  else if (overlay === 'shop') updateShopOverlay();
+  else if (overlay === 'quest') updateQuestOverlay();
   update();
   render();
   requestAnimationFrame(loop);
