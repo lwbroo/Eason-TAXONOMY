@@ -393,7 +393,8 @@ function makeGroundEnemy(x, groundY, cfg) {
     attackMode: cfg.attackMode || 'ranged',
     projectileKind: cfg.projectileKind || 'bomb',
     colorMain: cfg.colorMain || '#3a3a44', colorAccent: cfg.colorAccent || '#e8e8ee',
-    bossBurstCooldown: 0
+    bossBurstCooldown: 0,
+    buried: !!cfg.buried, emerging: false, emergeTimer: 0, emergeDuration: 0
   };
 }
 
@@ -457,9 +458,9 @@ const LEVEL_DEFS = {
     grunts: ['極速燕子', '貓頭鷹伯爵'], bossName: '飛龍亞基爾',
     theme: { sky1:'#1a3a6e', sky2:'#4c78c0', sky3:'#dcefff', hill:'#2e4f86', focal:'cloud' },
     makeEnemies: () => [
-      makeFlyingEnemy(700, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:2.1, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
+      makeFlyingEnemy(700, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
       makeFlyingEnemy(1050, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
-      makeFlyingEnemy(1620, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:2.1, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
+      makeFlyingEnemy(1620, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
       makeFlyingEnemy(1950, GROUND_Y-230, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
       makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff' })
     ]
@@ -470,9 +471,9 @@ const LEVEL_DEFS = {
     theme: { sky1:'#0f2e14', sky2:'#1f5c2a', sky3:'#a8d98a', hill:'#173d1e', focal:'canopy' },
     makeEnemies: () => [
       makeGroundEnemy(680, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
-      makeGroundEnemy(780, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a' }),
+      makeGroundEnemy(780, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true }),
       makeGroundEnemy(1550, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
-      makeGroundEnemy(1650, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a' }),
+      makeGroundEnemy(1650, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true }),
       makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0' })
     ]
   },
@@ -898,7 +899,7 @@ function resolveAttackHit(dmgOverride, reachOverride) {
   const hb = attackHitbox(reachOverride);
   const dmg = dmgOverride != null ? dmgOverride : currentWeaponDmg();
   for (const en of enemies) {
-    if (en.dead) continue;
+    if (en.dead || en.buried) continue;
     if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
       damageEnemy(en, dmg);
     }
@@ -909,7 +910,7 @@ function resolveAttackHit(dmgOverride, reachOverride) {
 function resolveSpecialAoeHit(dmg, radius) {
   const cx = player.x + player.w/2, cy = player.y + player.h/2;
   for (const en of enemies) {
-    if (en.dead) continue;
+    if (en.dead || en.buried) continue;
     const ex = en.x + en.w/2, ey = en.y + en.h/2;
     if (Math.hypot(ex-cx, ey-cy) <= radius) damageEnemy(en, dmg);
   }
@@ -973,7 +974,7 @@ function updateSpecial() {
     player.x = Math.max(0, Math.min(LEVEL_WIDTH - player.w, player.x));
     const hb = { x: player.x, y: player.y, w: player.w, h: player.h };
     for (const en of enemies) {
-      if (en.dead || player.dashSpecial.hitSet.has(en)) continue;
+      if (en.dead || en.buried || player.dashSpecial.hitSet.has(en)) continue;
       if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
         damageEnemy(en, currentWeaponDmg() * 1.3);
         player.dashSpecial.hitSet.add(en);
@@ -1000,7 +1001,7 @@ function updateSpecial() {
 function checkHammerHits(h) {
   const hb = {x: h.x-18, y: h.y-18, w:36, h:36};
   for (const en of enemies) {
-    if (en.dead || h.hitSet.has(en)) continue;
+    if (en.dead || en.buried || h.hitSet.has(en)) continue;
     if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
       damageEnemy(en, currentWeaponDmg() * 1.1);
       h.hitSet.add(en);
@@ -1079,6 +1080,24 @@ function updateEnemies() {
       continue;
     }
     if (en.hitFlash > 0) en.hitFlash--;
+
+    if (en.buried) {
+      en.y = en.groundY - en.h;
+      if (!en.emerging) {
+        const dx = player.x - (en.x + en.w/2);
+        const dy = player.y - en.y;
+        // stays hidden until the dragon walks close, then bursts out of the ground
+        if (Math.abs(dx) < 150 && Math.abs(dy) < 160) {
+          en.emerging = true;
+          en.emergeDuration = 28;
+          en.emergeTimer = en.emergeDuration;
+        }
+      } else {
+        en.emergeTimer--;
+        if (en.emergeTimer <= 0) { en.buried = false; en.emerging = false; }
+      }
+      continue;
+    }
 
     if (en.type === 'bomb') {
       const dx = player.x - en.x;
@@ -1533,6 +1552,12 @@ function drawBossCreature(en) {
   ctx.save();
   ctx.translate(en.x, en.y);
   if (en.hitFlash > 0) ctx.filter = 'brightness(1.8)';
+  // The beast/dragon art is drawn head-to-the-right by construction; mirror it
+  // when facing left so the boss's head (not its tail) points at the player.
+  if (en.dir < 0) {
+    ctx.translate(en.w, 0);
+    ctx.scale(-1, 1);
+  }
   if (en.type === 'bomb') drawBossBeast(en); else drawBossDragon(en);
   ctx.restore();
 
@@ -1689,7 +1714,167 @@ function drawBossDragon(en) {
   ctx.fill();
 }
 
+function drawBuriedMound(en) {
+  ctx.save();
+  ctx.translate(en.x, en.y);
+  const cx = en.w/2, cy = en.h;
+  ctx.fillStyle = 'rgba(30,20,10,0.5)';
+  ctx.beginPath(); ctx.ellipse(cx, cy, en.w*0.5, 6, 0, 0, Math.PI*2); ctx.fill();
+  // a couple of leaf tips poking out of the dirt, swaying gently until it's triggered
+  ctx.strokeStyle = en.colorAccent;
+  ctx.lineWidth = 2;
+  const sway = Math.sin(frame*0.08) * 2;
+  ctx.beginPath();
+  ctx.moveTo(cx-5, cy); ctx.quadraticCurveTo(cx-5+sway, cy-10, cx-3, cy-15);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx+5, cy); ctx.quadraticCurveTo(cx+5-sway, cy-8, cx+7, cy-13);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Molten, legless blob body for the 'lava' kind: a wobbling amorphous outline with
+// glowing cracks instead of the generic robot's rigid limbs.
+function drawLavaBlobBody(en, maxWindup) {
+  const cx = en.w/2, cy = en.h/2 + en.h*0.14;
+  const baseR = en.w/2 - 2;
+
+  ctx.beginPath();
+  const pts = 10;
+  for (let i = 0; i <= pts; i++) {
+    const ang = (Math.PI*2*i)/pts;
+    const wob = Math.sin(frame*0.12 + i*1.7) * baseR*0.15;
+    const flatten = Math.max(0, Math.sin(ang)) * baseR*0.18;
+    const r = baseR + wob - flatten;
+    const px = cx + Math.cos(ang)*r, py = cy + Math.sin(ang)*r*0.92;
+    if (i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = en.colorMain;
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -30);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // glowing molten cracks
+  ctx.strokeStyle = en.colorAccent;
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.7 + 0.3*Math.sin(frame*0.2);
+  for (const [ox,oy,l] of [[-8,-3,10],[6,-7,9],[-1,5,8]]) {
+    ctx.beginPath();
+    ctx.moveTo(cx+ox, cy+oy);
+    ctx.lineTo(cx+ox+l*0.4, cy+oy+l*0.6);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // small drips along the base
+  ctx.fillStyle = en.colorAccent;
+  for (const dx of [-baseR*0.5, 0, baseR*0.5]) {
+    const drip = 2.5 + Math.max(0, Math.sin(frame*0.1 + dx));
+    ctx.beginPath();
+    ctx.ellipse(cx+dx, cy+baseR*0.8, 3, drip, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // glowing eyes
+  ctx.fillStyle = '#fff6d0';
+  ctx.beginPath(); ctx.arc(cx-6, cy-4, 3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6, cy-4, 3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#3a1408';
+  ctx.beginPath(); ctx.arc(cx-6+en.dir, cy-4, 1.3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6+en.dir, cy-4, 1.3, 0, Math.PI*2); ctx.fill();
+
+  // a glob rears up on the throwing side during the windup telegraph
+  if (en.telegraph) {
+    const t = 1 - en.attackWindup / maxWindup;
+    ctx.fillStyle = en.colorAccent;
+    ctx.beginPath();
+    ctx.arc(cx + en.dir*baseR*0.7, cy - baseR*0.6 - t*14, 5, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+// Crab body for the 'shell' kind: wide flat body, a shell dome layered on top, scuttling
+// legs, and a pair of pincers (one raised during the windup telegraph).
+function drawCrabBodyShape(en, maxWindup) {
+  const cx = en.w/2, cy = en.h/2 + en.h*0.16;
+  const bx = en.w*0.42, by = en.h*0.3;
+
+  // scuttling legs
+  ctx.strokeStyle = shadeColor(en.colorMain, -30);
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < 3; i++) {
+    const legPhase = Math.sin(frame*0.25 + i) * 3;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + side*bx*0.7, cy + by*0.3);
+      ctx.lineTo(cx + side*(bx*1.1 + i*4), cy + by*0.85 + legPhase);
+      ctx.stroke();
+    }
+  }
+
+  // the "extra" shell dome sitting on top of the crab's body
+  ctx.fillStyle = shadeColor(en.colorMain, -12);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - by*0.5, bx*0.85, by*0.75, 0, Math.PI, 0);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - by*0.5, bx*0.85, by*0.75, 0, Math.PI, 0);
+  ctx.stroke();
+
+  // body
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath(); ctx.ellipse(cx, cy, bx, by, 0, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(cx, cy, bx, by, 0, 0, Math.PI*2); ctx.stroke();
+
+  // pincers - the one on the attacking side winds up before the hit
+  for (const side of [-1, 1]) {
+    const isAttackSide = side === en.dir;
+    ctx.save();
+    ctx.translate(cx + side*bx*0.95, cy - by*0.05);
+    let angle = side * 0.45;
+    if (en.telegraph && isAttackSide) {
+      const t = 1 - en.attackWindup / maxWindup;
+      angle = side * (0.45 - t * 1.7);
+    }
+    ctx.rotate(angle);
+    ctx.fillStyle = en.colorAccent;
+    ctx.beginPath();
+    ctx.moveTo(0, -5); ctx.lineTo(side*15, -5); ctx.lineTo(side*15, 5); ctx.lineTo(0, 5);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(side*13, -6); ctx.lineTo(side*21, -3); ctx.lineTo(side*13, 1);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(side*13, 6); ctx.lineTo(side*21, 3); ctx.lineTo(side*13, -1);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // eyes on stalks poking above the shell
+  ctx.strokeStyle = shadeColor(en.colorMain, -20);
+  ctx.lineWidth = 2;
+  for (const ox of [-6, 6]) {
+    ctx.beginPath();
+    ctx.moveTo(cx+ox, cy - by*0.8); ctx.lineTo(cx+ox, cy - by*1.3);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(cx-6, cy-by*1.35, 3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6, cy-by*1.35, 3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath(); ctx.arc(cx-6, cy-by*1.35, 1.3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6, cy-by*1.35, 1.3, 0, Math.PI*2); ctx.fill();
+}
+
 function drawBombBot(en) {
+  if (en.buried && !en.emerging) { drawBuriedMound(en); return; }
+
   const maxWindup = en.burst ? 50 : 30;
   if (en.exploding) {
     const warnPct = en.explodeTimer / 30;
@@ -1699,7 +1884,18 @@ function drawBombBot(en) {
   }
   ctx.save();
   ctx.translate(en.x, en.y);
+  if (en.emerging) {
+    ctx.fillStyle = 'rgba(30,20,10,0.5)';
+    ctx.beginPath(); ctx.ellipse(en.w/2, en.h, en.w*0.5, 6, 0, 0, Math.PI*2); ctx.fill();
+    const revealed = Math.max(3, (1 - en.emergeTimer / en.emergeDuration) * en.h);
+    ctx.beginPath();
+    ctx.rect(0, en.h - revealed, en.w, revealed);
+    ctx.clip();
+  }
   if (en.hitFlash > 0) ctx.filter = 'brightness(2)';
+
+  if (en.kind === 'lava') { drawLavaBlobBody(en, maxWindup); ctx.restore(); drawEnemyHp(en); return; }
+  if (en.kind === 'shell') { drawCrabBodyShape(en, maxWindup); ctx.restore(); drawEnemyHp(en); return; }
 
   const bodyR = en.w/2 - 2;
   const cx = en.w/2, cy = en.h/2 + en.h*0.1;
@@ -1771,10 +1967,6 @@ function drawBombBot(en) {
         ctx.moveTo(cx+ox-3, cy-bodyR+4); ctx.lineTo(cx+ox+3, cy-bodyR+4); ctx.lineTo(cx+ox, cy-bodyR-6);
         ctx.fill();
       }
-    } else if (en.kind === 'shell') {
-      ctx.strokeStyle = shadeColor(en.colorMain, -25);
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(cx, cy-2, bodyR-4, Math.PI*1.1, Math.PI*1.9); ctx.stroke();
     } else if (en.kind === 'wolf') {
       ctx.fillStyle = shadeColor(en.colorMain, -15);
       ctx.beginPath();
@@ -1794,6 +1986,102 @@ function drawBombBot(en) {
   drawEnemyHp(en);
 }
 
+// Humanoid robed caster for the 'mage' kind: hooded silhouette hovering instead of the
+// generic drone box, holding a staff that glows brighter as its cast telegraph builds.
+function drawMageBody(en) {
+  const cx = en.w/2, cy = en.h/2;
+  const bob = Math.sin(en.phase) * 2;
+
+  // flowing robe
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.22, cy - en.h*0.15 + bob);
+  ctx.lineTo(cx + en.w*0.22, cy - en.h*0.15 + bob);
+  ctx.quadraticCurveTo(cx + en.w*0.34, cy + en.h*0.55 + bob, cx + en.w*0.16, cy + en.h*0.62 + bob);
+  ctx.lineTo(cx - en.w*0.16, cy + en.h*0.62 + bob);
+  ctx.quadraticCurveTo(cx - en.w*0.34, cy + en.h*0.55 + bob, cx - en.w*0.22, cy - en.h*0.15 + bob);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -30);
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // hood and dark face void with glowing eyes
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  ctx.beginPath();
+  ctx.arc(cx, cy - en.h*0.28 + bob, en.w*0.2, Math.PI, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#1a1424';
+  ctx.beginPath();
+  ctx.arc(cx, cy - en.h*0.2 + bob, en.w*0.15, 0, Math.PI*2);
+  ctx.fill();
+  ctx.globalAlpha = en.charging ? (0.6 + 0.4*Math.sin(frame*0.8)) : 0.9;
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath(); ctx.arc(cx-4, cy-en.h*0.2+bob, 2, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+4, cy-en.h*0.2+bob, 2, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // staff, raised on the attacking side, orb glowing brighter mid-cast
+  ctx.save();
+  ctx.translate(cx + en.dir*en.w*0.3, cy + bob);
+  let staffAngle = en.dir * 0.15;
+  if (en.charging) staffAngle = en.dir * (0.15 - (1 - en.chargeTimer/20) * 0.5);
+  ctx.rotate(staffAngle);
+  ctx.strokeStyle = '#6a5030';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, -en.h*0.35); ctx.lineTo(0, en.h*0.35); ctx.stroke();
+  ctx.fillStyle = en.colorAccent;
+  ctx.globalAlpha = en.charging ? (0.7 + 0.3*Math.sin(frame*0.9)) : 0.85;
+  ctx.beginPath(); ctx.arc(0, -en.h*0.38, en.charging ? 6 : 4, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// Sleek swallow silhouette for the 'bird' kind: pointed body, swept wings that flutter
+// much faster than the other flyers, and a forked tail trailing the direction of travel.
+function drawSwallowBody(en) {
+  const cx = en.w/2, cy = en.h/2;
+  const flap = Math.sin(frame*0.6) * 0.7;
+
+  // forked tail trailing behind
+  ctx.fillStyle = en.colorMain;
+  ctx.save();
+  ctx.translate(cx - en.dir*en.w*0.42, cy);
+  ctx.beginPath();
+  ctx.moveTo(0,0); ctx.lineTo(-en.dir*14,-7); ctx.lineTo(-en.dir*6,0); ctx.lineTo(-en.dir*14,7);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // sleek pointed body
+  ctx.beginPath();
+  ctx.moveTo(cx + en.dir*en.w*0.55, cy);
+  ctx.quadraticCurveTo(cx, cy - en.h*0.5, cx - en.dir*en.w*0.4, cy - en.h*0.1);
+  ctx.quadraticCurveTo(cx, cy + en.h*0.5, cx + en.dir*en.w*0.55, cy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -25);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // fast-flapping swept-back wings
+  ctx.fillStyle = en.colorAccent;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(-0.5 - flap);
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-en.w*0.6,-en.h*0.3); ctx.lineTo(-en.w*0.45, en.h*0.15); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(0.5 + flap);
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-en.w*0.6, en.h*0.3); ctx.lineTo(-en.w*0.45, -en.h*0.15); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // pale belly patch + beak
+  ctx.beginPath();
+  ctx.ellipse(cx - en.dir*en.w*0.05, cy + en.h*0.1, en.w*0.18, en.h*0.2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#f0b23a';
+  ctx.beginPath();
+  ctx.moveTo(cx + en.dir*en.w*0.5, cy-2); ctx.lineTo(cx + en.dir*en.w*0.62, cy); ctx.lineTo(cx + en.dir*en.w*0.5, cy+2);
+  ctx.fill();
+}
+
 function drawDrone(en) {
   if (en.charging) {
     drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, en.isBoss ? 30 : 20);
@@ -1802,6 +2090,9 @@ function drawDrone(en) {
   ctx.translate(en.x, en.y);
   if (en.hitFlash > 0) ctx.filter = 'brightness(2)';
   if (en.charging) ctx.filter = 'brightness(1.6) saturate(1.4)';
+
+  if (en.kind === 'mage') { drawMageBody(en); ctx.restore(); drawEnemyHp(en); return; }
+  if (en.kind === 'bird') { drawSwallowBody(en); ctx.restore(); drawEnemyHp(en); return; }
 
   ctx.fillStyle = en.colorMain;
   roundRect(ctx, 4, 4, en.w-8, en.h-10, 4);
@@ -1822,7 +2113,7 @@ function drawDrone(en) {
       ctx.quadraticCurveTo(tx+wig, en.h+6, tx+wig*0.6, en.h+14);
       ctx.stroke();
     }
-  } else if (en.kind === 'bird' || en.kind === 'owl' || en.kind === 'dragon') {
+  } else if (en.kind === 'owl' || en.kind === 'dragon') {
     const flap = Math.sin(frame*0.3) * 0.6;
     ctx.fillStyle = en.colorAccent;
     ctx.save(); ctx.translate(2, en.h/2); ctx.rotate(-0.3 - flap);
@@ -1831,14 +2122,12 @@ function drawDrone(en) {
     ctx.save(); ctx.translate(en.w-2, en.h/2); ctx.rotate(0.3 + flap);
     ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(14,-4); ctx.lineTo(10,6); ctx.fill();
     ctx.restore();
-    if (en.kind === 'owl' || en.kind === 'dragon') {
-      ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = '#3a2a1a';
-      ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
-    }
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#3a2a1a';
+    ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
   } else {
     ctx.strokeStyle = shadeColor(en.colorMain, -40);
     ctx.lineWidth = 2;
@@ -2558,7 +2847,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && state === 'lose') {
     state = 'menu';
   }
-  if ((e.code === 'KeyL' || e.code === 'Escape') && overlay) {
+  if ((e.code === 'KeyL' || e.code === 'Escape' || e.code === 'KeyJ') && overlay) {
     overlay = null;
   }
 });
