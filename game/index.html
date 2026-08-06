@@ -230,16 +230,16 @@ const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the s
 // ---------- Game state ----------
 let state = 'menu'; // menu -> playing -> win -> lose
 let selectedWeapon = 'sword';
-let levelTimeLeft = 200 * 60; // frames (~200s at 60fps) - a longer map needs more room than the drawing's "1:00"
+let levelTimeLeft = 130 * 60; // frames (~130s at 60fps)
 let frame = 0;
 
 const camera = { x: 0 };
-const LEVEL_WIDTH = 5290;
+const LEVEL_WIDTH = 3000;
 const GROUND_Y = 520;
 
 // Platforms laid out to mirror the drawing: stepped blocks with gaps, a floating
-// platform mid-level. The level is two back-to-back copies of the same gap/step
-// pattern (validated jumpable with the current jump power), ending at a rocket-ship goal.
+// platform mid-level (validated jumpable with the current jump power), ending on a
+// wide final platform where the portal to the village stands.
 const platforms = [
   {x:0,    y:GROUND_Y, w:300, h:80},
   {x:380,  y:GROUND_Y, w:170, h:80},
@@ -248,16 +248,7 @@ const platforms = [
   {x:1180, y:GROUND_Y-90, w:220, h:170, floating:true},
   {x:1500, y:GROUND_Y, w:230, h:80},
   {x:1830, y:GROUND_Y, w:260, h:80},
-  {x:2190, y:GROUND_Y, w:410, h:80},
-
-  {x:2690, y:GROUND_Y, w:300, h:80},
-  {x:3070, y:GROUND_Y, w:170, h:80},
-  {x:3330, y:GROUND_Y, w:210, h:80},
-  {x:3630, y:GROUND_Y-40, w:150, h:120},
-  {x:3870, y:GROUND_Y-90, w:220, h:170, floating:true},
-  {x:4190, y:GROUND_Y, w:230, h:80},
-  {x:4520, y:GROUND_Y, w:260, h:80},
-  {x:4880, y:GROUND_Y, w:410, h:80}
+  {x:2190, y:GROUND_Y, w:810, h:80}
 ];
 
 function groundHeightAt(x) {
@@ -296,8 +287,41 @@ const player = {
   // potions (do not regenerate - only refilled by picking up more, or a fresh run)
   hpPotions: 3, maxHpPotions: 3,
   fpPotions: 3, maxFpPotions: 3,
-  potionCooldown: 0
+  potionCooldown: 0,
+  // village shop
+  gold: 0,
+  weaponDmgBonus: 0,
+  shopLevels: { weapon:0, armor:0, hpflask:0, fpflask:0 }
 };
+
+function currentWeaponDmg() {
+  return player.weapon.dmg + player.weaponDmgBonus;
+}
+
+// ---------- Village shop ----------
+const SHOP_ITEMS = [
+  { id:'weapon',  name:'武器強化', desc:'+4 攻擊力',            baseCost:20, costStep:10, maxLevel:5 },
+  { id:'armor',   name:'護甲',    desc:'+20 上限HP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
+  { id:'hpflask', name:'HP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 },
+  { id:'fpflask', name:'MP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 }
+];
+function shopItemCost(item) {
+  return item.baseCost + item.costStep * player.shopLevels[item.id];
+}
+function buyShopItem(id) {
+  const item = SHOP_ITEMS.find(s => s.id === id);
+  if (!item) return;
+  const level = player.shopLevels[id];
+  if (level >= item.maxLevel) return;
+  const cost = shopItemCost(item);
+  if (player.gold < cost) return;
+  player.gold -= cost;
+  player.shopLevels[id]++;
+  if (id === 'weapon') player.weaponDmgBonus += 4;
+  else if (id === 'armor') { player.maxHp += 20; player.hp = Math.min(player.maxHp, player.hp + 20); }
+  else if (id === 'hpflask') { player.maxHpPotions++; player.hpPotions = Math.min(player.maxHpPotions, player.hpPotions + 1); }
+  else if (id === 'fpflask') { player.maxFpPotions++; player.fpPotions = Math.min(player.maxFpPotions, player.fpPotions + 1); }
+}
 
 // ---------- Enemies ----------
 let enemies = [];
@@ -308,14 +332,7 @@ function spawnLevel1Enemies() {
     makeBombBot(1620, GROUND_Y),
     makeDrone(1950, GROUND_Y-200),
     makeBombBot(2260, GROUND_Y),
-    makeDrone(2400, GROUND_Y-180),
-
-    makeBombBot(3390, GROUND_Y),
-    makeDrone(3740, GROUND_Y-220),
-    makeBombBot(4310, GROUND_Y),
-    makeDrone(4640, GROUND_Y-200),
-    makeBombBot(4950, GROUND_Y),
-    makeDrone(5090, GROUND_Y-180)
+    makeDrone(2500, GROUND_Y-180)
   ];
 }
 function makeBombBot(x, groundY) {
@@ -339,7 +356,51 @@ function makeDrone(x, y) {
   };
 }
 
-// ---------- Particles (fire breath, hits, explosions) ----------
+// ---------- Coins ----------
+const COIN_VALUE = 5;
+let coins = [];
+function spawnCoins() {
+  coins = [];
+  for (const p of platforms) {
+    const n = Math.max(2, Math.floor(p.w / 140));
+    for (let i = 0; i < n; i++) {
+      coins.push({
+        x: p.x + (p.w / (n + 1)) * (i + 1),
+        y: p.y - 34,
+        r: 9, collected: false, phase: Math.random() * Math.PI * 2
+      });
+    }
+  }
+}
+function updateCoins() {
+  const hb = {x: player.x, y: player.y, w: player.w, h: player.h};
+  for (const c of coins) {
+    if (c.collected) continue;
+    if (rectsOverlap(hb, {x:c.x-c.r, y:c.y-c.r, w:c.r*2, h:c.r*2})) {
+      c.collected = true;
+      player.gold += COIN_VALUE;
+      spawnSparkleAt(c.x, c.y, '#ffd35c');
+    }
+  }
+}
+function drawCoins() {
+  for (const c of coins) {
+    if (c.collected) continue;
+    const bob = Math.sin(frame * 0.08 + c.phase) * 3;
+    ctx.save();
+    ctx.translate(c.x - camera.x, c.y + bob);
+    ctx.fillStyle = '#f5c542';
+    ctx.beginPath(); ctx.arc(0, 0, c.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#c98a1f';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, c.r, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#fff3c9';
+    ctx.beginPath(); ctx.arc(-2.5, -2.5, c.r*0.35, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ---------- Particles (hits, explosions, pickups) ----------
 let particles = [];
 function addParticle(p) { particles.push(p); }
 
@@ -429,24 +490,33 @@ function updateMenu() {
 const menuKeyState = { left:{}, right:{}, space:{}, enter:{}, j:{} };
 
 canvas.addEventListener('click', (e) => {
-  if (state !== 'menu') return;
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left) * (W / rect.width);
   const my = (e.clientY - rect.top) * (H / rect.height);
-  weaponOrder.forEach((key, i) => {
-    const cardX = 90 + i * 280;
-    const cardY = 210;
-    if (mx > cardX && mx < cardX+240 && my > cardY && my < cardY+300) {
-      menuSelectIndex = i;
-      startGame(key);
+
+  if (state === 'menu') {
+    weaponOrder.forEach((key, i) => {
+      const cardX = 90 + i * 280;
+      const cardY = 210;
+      if (mx > cardX && mx < cardX+240 && my > cardY && my < cardY+300) {
+        menuSelectIndex = i;
+        startGame(key);
+      }
+    });
+  } else if (state === 'village') {
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        buyShopItem(card.id);
+      }
     }
-  });
+  }
 });
 
 function startGame(weaponKey) {
   selectedWeapon = weaponKey;
   player.weapon = WEAPONS[weaponKey];
   player.x = 60; player.y = GROUND_Y-60; player.vx=0; player.vy=0;
+  player.maxHp = 100; player.maxHpPotions = 3; player.maxFpPotions = 3;
   player.hp = player.maxHp; player.fp = player.maxFp; player.sta = player.maxSta;
   player.dead = false;
   player.lastGroundX = player.x;
@@ -460,10 +530,14 @@ function startGame(weaponKey) {
   player.hpPotions = player.maxHpPotions;
   player.fpPotions = player.maxFpPotions;
   player.potionCooldown = 0;
+  player.gold = 0;
+  player.weaponDmgBonus = 0;
+  player.shopLevels = { weapon:0, armor:0, hpflask:0, fpflask:0 };
   camera.x = 0;
-  levelTimeLeft = 200*60;
+  levelTimeLeft = 130*60;
   frame = 0;
   spawnLevel1Enemies();
+  spawnCoins();
   particles = [];
   projectiles = [];
   state = 'playing';
@@ -601,10 +675,12 @@ function updatePlayer() {
     setTimeout(()=>{ if (state==='playing') state = 'lose'; }, 600);
   }
 
-  // reach rocket = win
-  if (player.x > LEVEL_WIDTH - 160) {
-    state = 'win';
+  // reach the portal -> travel to the village
+  if (player.x > LEVEL_WIDTH - 160 && state === 'playing') {
+    state = 'village';
   }
+
+  updateCoins();
 }
 const potionKeyState = { hp:{}, fp:{} };
 
@@ -631,7 +707,7 @@ function attackHitbox(reachOverride) {
 
 function resolveAttackHit(dmgOverride, reachOverride) {
   const hb = attackHitbox(reachOverride);
-  const dmg = dmgOverride != null ? dmgOverride : player.weapon.dmg;
+  const dmg = dmgOverride != null ? dmgOverride : currentWeaponDmg();
   for (const en of enemies) {
     if (en.dead) continue;
     if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
@@ -680,7 +756,7 @@ function updateSpecial() {
   if (type === 'sword') {
     player.specialTimer--;
     if (player.specialTimer === 16) {
-      resolveSpecialAoeHit(player.weapon.dmg * 1.4, 62);
+      resolveSpecialAoeHit(currentWeaponDmg() * 1.4, 62);
     }
     if (player.specialTimer <= 0) {
       player.specialType = null;
@@ -691,7 +767,7 @@ function updateSpecial() {
   } else if (type === 'spear') {
     player.specialTimer--;
     if ([38, 30, 22, 14, 6].includes(player.specialTimer)) {
-      resolveAttackHit(player.weapon.dmg * 0.75, player.weapon.range + 8);
+      resolveAttackHit(currentWeaponDmg() * 0.75, player.weapon.range + 8);
     }
     if (player.specialTimer <= 0) {
       player.specialType = null;
@@ -705,7 +781,7 @@ function checkHammerHits(h) {
   for (const en of enemies) {
     if (en.dead || h.hitSet.has(en)) continue;
     if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
-      damageEnemy(en, player.weapon.dmg * 1.1);
+      damageEnemy(en, currentWeaponDmg() * 1.1);
       h.hitSet.add(en);
     }
   }
@@ -735,12 +811,15 @@ function updateHammerThrow() {
   }
 }
 
-function spawnPotionSparkle(color) {
-  for (let i = 0; i < 12; i++) {
+function spawnSparkleAt(x, y, color, count) {
+  for (let i = 0; i < (count || 12); i++) {
     const ang = Math.random() * Math.PI * 2;
-    addParticle({type:'spark', x:player.x+player.w/2, y:player.y+player.h/2,
+    addParticle({type:'spark', x, y,
       vx:Math.cos(ang)*2.2, vy:Math.sin(ang)*2.2-1.5, life:26, maxLife:26, size:2.5+Math.random()*2.5, color});
   }
+}
+function spawnPotionSparkle(color) {
+  spawnSparkleAt(player.x + player.w/2, player.y + player.h/2, color);
 }
 
 function damageEnemy(en, dmg) {
@@ -913,6 +992,9 @@ function drawHUD() {
   ctx.font = 'bold 20px sans-serif';
   ctx.textAlign = 'right';
   ctx.fillText(`${mm}:${ss.toString().padStart(2,'0')}`, W-24, 34);
+  ctx.font = 'bold 15px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣 ${player.gold}`, W-24, 58);
   ctx.textAlign = 'left';
 
   // weapon indicator
@@ -1281,30 +1363,39 @@ function drawPlatform(p) {
   ctx.strokeRect(p.x - camera.x, p.y, p.w, 4);
 }
 
-function drawRocket(x, groundY) {
+function drawPortal(x, groundY) {
   ctx.save();
   ctx.translate(x - camera.x, groundY);
-  ctx.fillStyle = '#e8e4de';
-  roundRect(ctx, -22, -170, 44, 130, 10);
-  ctx.fill();
-  ctx.fillStyle = '#d4453f';
-  ctx.fillRect(-22, -140, 44, 14);
-  ctx.fillRect(-22, -100, 44, 14);
-  ctx.beginPath();
-  ctx.moveTo(-22,-170); ctx.lineTo(0,-210); ctx.lineTo(22,-170);
-  ctx.fillStyle = '#d4453f';
-  ctx.fill();
-  ctx.fillStyle = '#8fb8dd';
-  ctx.beginPath();
-  ctx.arc(0, -115, 11, 0, Math.PI*2);
-  ctx.fill();
-  ctx.fillStyle = '#c9c4bc';
-  ctx.beginPath();
-  ctx.moveTo(-22,-40); ctx.lineTo(-38,10); ctx.lineTo(-14,-10); ctx.closePath(); ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(22,-40); ctx.lineTo(38,10); ctx.lineTo(14,-10); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#e8e4de';
-  ctx.fillRect(-16, -40, 32, 40);
+  const pulse = 0.5 + 0.5 * Math.sin(frame * 0.06);
+
+  // stone archway frame
+  ctx.fillStyle = '#4a4258';
+  roundRect(ctx, -58, -190, 24, 190, 8); ctx.fill();
+  roundRect(ctx, 34, -190, 24, 190, 8); ctx.fill();
+  roundRect(ctx, -58, -206, 116, 26, 10); ctx.fill();
+
+  // outer glow
+  ctx.fillStyle = `rgba(150,90,255,${0.22 + 0.13*pulse})`;
+  ctx.beginPath(); ctx.ellipse(-12, -100, 60, 94, 0, 0, Math.PI*2); ctx.fill();
+
+  // swirling portal disc
+  const grad = ctx.createRadialGradient(-12, -100, 4, -12, -100, 46);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.45, '#c9a2ff');
+  grad.addColorStop(1, '#5a2fae');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.ellipse(-12, -100, 42, 78, 0, 0, Math.PI*2); ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    const t = (frame * 0.03 + i / 3) % 1;
+    ctx.globalAlpha = 1 - t;
+    ctx.beginPath();
+    ctx.ellipse(-12, -100, 42 * (1 - t) + 4, 78 * (1 - t) + 4, 0, 0, Math.PI*2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
@@ -1408,11 +1499,13 @@ function render() {
   ctx.clearRect(0,0,W,H);
 
   if (state === 'menu') { renderMenu(); return; }
+  if (state === 'village') { renderVillage(); return; }
 
   drawBackground();
 
   for (const p of platforms) drawPlatform(p);
-  drawRocket(LEVEL_WIDTH - 80, GROUND_Y);
+  drawCoins();
+  drawPortal(LEVEL_WIDTH - 80, GROUND_Y);
 
   for (const en of enemies) {
     if (en.dead && !(en.type==='bomb' && en.exploding)) continue;
@@ -1434,7 +1527,6 @@ function render() {
 
   drawHUD();
 
-  if (state === 'win') renderOverlay('恭喜過關！', '你成功抵達火箭，飛向下一站！', '#4CC15A');
   if (state === 'lose') renderOverlay('挑戰失敗', '按 R 重新挑戰', '#e0453f');
 }
 
@@ -1448,6 +1540,86 @@ function renderOverlay(title, sub, color) {
   ctx.fillStyle = '#fff';
   ctx.font = '18px sans-serif';
   ctx.fillText(sub, W/2, H/2 + 30);
+  ctx.textAlign = 'left';
+}
+
+// ---------- Village ----------
+let villageCardRects = [];
+const villageKeyState = { 1:{}, 2:{}, 3:{}, 4:{} };
+
+function updateVillage() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4'];
+  SHOP_ITEMS.forEach((item, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState[i+1])) buyShopItem(item.id);
+  });
+}
+
+function renderVillage() {
+  drawBackground();
+  ctx.fillStyle = 'rgba(20,10,30,0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.fillText('紅月遺跡外圍聚落', W/2, 62);
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText('你安全抵達村莊！用撿到的金幣補給裝備吧', W/2, 86);
+
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 118);
+
+  villageCardRects = [];
+  const cw = 200, ch = 190, gap = 20;
+  const totalW = SHOP_ITEMS.length * cw + (SHOP_ITEMS.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+  const y = 145;
+
+  SHOP_ITEMS.forEach((item, i) => {
+    const x = startX + i * (cw + gap);
+    const level = player.shopLevels[item.id];
+    const maxed = level >= item.maxLevel;
+    const cost = shopItemCost(item);
+    const afford = !maxed && player.gold >= cost;
+    villageCardRects.push({x, y, w:cw, h:ch, id:item.id});
+
+    ctx.fillStyle = afford ? 'rgba(76,193,90,0.16)' : 'rgba(255,255,255,0.08)';
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.fill();
+    ctx.strokeStyle = afford ? '#4CC15A' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = afford ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 17px sans-serif';
+    ctx.fillText(item.name, x+cw/2, y+34);
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.82)';
+    ctx.fillText(item.desc, x+cw/2, y+58);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(`等級 ${level}/${item.maxLevel}`, x+cw/2, y+80);
+
+    if (maxed) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.fillText('已強化至上限', x+cw/2, y+ch-44);
+    } else {
+      ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.fillText(`${cost} 金幣`, x+cw/2, y+ch-44);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊購買`, x+cw/2, y+ch-20);
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('R 重新挑戰', W/2, H-30);
   ctx.textAlign = 'left';
 }
 
@@ -1551,13 +1723,14 @@ function drawWeaponIcon(key) {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyR' && (state === 'lose' || state === 'win')) {
+  if (e.code === 'KeyR' && (state === 'lose' || state === 'village')) {
     state = 'menu';
   }
 });
 
 function loop() {
   if (state === 'menu') updateMenu();
+  if (state === 'village') updateVillage();
   update();
   render();
   requestAnimationFrame(loop);
