@@ -2296,7 +2296,9 @@ function drawBossCreature(en) {
     ctx.translate(en.w, 0);
     ctx.scale(-1, 1);
   }
-  if (en.type === 'bomb') drawBossBeast(en); else drawBossDragon(en);
+  if (en.name === '熔岩土龍') drawLavaTitanBoss(en);
+  else if (en.type === 'bomb') drawBossBeast(en);
+  else drawBossDragon(en);
   ctx.restore();
 
   drawEnemyHp(en);
@@ -2387,6 +2389,159 @@ function drawBossBeast(en) {
   ctx.moveTo(hx + en.w*0.1, hy + en.h*0.08);
   ctx.lineTo(hx + en.w*0.3, hy + en.h*0.1);
   ctx.stroke();
+}
+
+// 熔岩土龍's own silhouette, built off a reference of a hunched, rock-scaled dragon
+// with folded bat wings and lava dripping from its jaw and one melting foreleg -
+// distinct from the shared drawBossBeast used by the other ground-type boss.
+function drawLavaTitanBoss(en) {
+  const cx = en.w/2, cy = en.h*0.58;
+  const bodyW = en.w*0.62, bodyH = en.h*0.5;
+
+  // tail with a spiked tip
+  ctx.fillStyle = shadeColor(en.colorMain, -15);
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyW*0.9, cy);
+  ctx.quadraticCurveTo(cx - en.w*0.55, cy - en.h*0.15, cx - en.w*0.48, cy - en.h*0.42);
+  ctx.quadraticCurveTo(cx - en.w*0.42, cy - en.h*0.1, cx - bodyW*0.7, cy + bodyH*0.2);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.5, cy - en.h*0.38);
+  ctx.lineTo(cx - en.w*0.6, cy - en.h*0.52);
+  ctx.lineTo(cx - en.w*0.44, cy - en.h*0.3);
+  ctx.fill();
+
+  // back legs (behind the body)
+  ctx.fillStyle = shadeColor(en.colorMain, -25);
+  roundRect(ctx, cx - bodyW*0.55, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+  roundRect(ctx, cx + bodyW*0.35, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+
+  // hunched, craggy body
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 2;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.stroke();
+
+  // folded bat wings, layered over the back with visible rib lines
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.translate(cx + side*bodyW*0.42, cy - bodyH*0.45);
+    ctx.scale(side, 1);
+    ctx.beginPath();
+    ctx.moveTo(-en.w*0.05, en.h*0.32);
+    ctx.lineTo(en.w*0.22, -en.h*0.42);
+    ctx.lineTo(en.w*0.12, -en.h*0.08);
+    ctx.lineTo(en.w*0.22, en.h*0.1);
+    ctx.lineTo(en.w*0.08, en.h*0.2);
+    ctx.lineTo(en.w*0.14, en.h*0.36);
+    ctx.closePath();
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = shadeColor(en.colorMain, -32);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = shadeColor(en.colorMain, -55);
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-en.w*0.02, en.h*0.28);
+    ctx.lineTo(en.w*0.2, -en.h*0.36);
+    ctx.moveTo(0, en.h*0.14);
+    ctx.lineTo(en.w*0.18, -en.h*0.04);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // dense rocky scutes across the back, denser than a normal spine ridge
+  ctx.fillStyle = shadeColor(en.colorMain, -18);
+  for (let i = 0; i < 9; i++) {
+    const sx = cx - bodyW*0.85 + i * (bodyW*1.7/8);
+    const sh = bodyH*0.28 + bodyH*0.22 * Math.abs(Math.sin(i*2.3));
+    ctx.beginPath();
+    ctx.moveTo(sx-5, cy-bodyH*0.85);
+    ctx.lineTo(sx+5, cy-bodyH*0.85);
+    ctx.lineTo(sx, cy-bodyH*0.85-sh-8);
+    ctx.fill();
+  }
+
+  // front legs - the forward one is half-melted, glowing and dripping lava
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, cx - bodyW*0.85, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  const moltenPulse = 0.7 + 0.3 * Math.sin(frame*0.15);
+  ctx.save();
+  ctx.globalAlpha = moltenPulse;
+  ctx.fillStyle = en.colorAccent;
+  roundRect(ctx, cx + bodyW*0.55, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, cx - bodyW*0.85, en.h*0.68, en.w*0.16, en.h*0.12, 4); ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(cx-bodyW*0.85-2, en.h*1.02); ctx.lineTo(cx-bodyW*0.85+en.w*0.16+2, en.h*1.02); ctx.lineTo(cx-bodyW*0.85+en.w*0.08, en.h*1.1);
+  ctx.fill();
+  // lava drips off the molten claw
+  for (const dx of [0, 7, 14]) {
+    const dripLen = 5 + 4 * Math.sin(frame*0.1 + dx);
+    ctx.beginPath();
+    ctx.moveTo(cx + bodyW*0.55 + dx, en.h*1.02 + 2);
+    ctx.lineTo(cx + bodyW*0.55 + dx + 3, en.h*1.02 + 2 + dripLen);
+    ctx.lineTo(cx + bodyW*0.55 + dx - 3, en.h*1.02 + 2 + dripLen);
+    ctx.fill();
+  }
+
+  // head with craggy brow, horns, glowing eye, and a molten lower jaw -
+  // kept close to the body with a snout bridge so it reads as one connected beast
+  const hx = cx + bodyW*0.78, hy = cy - bodyH*0.5;
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, en.w*0.24, en.h*0.2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, hx + en.w*0.08, hy - en.h*0.05, en.w*0.16, en.h*0.14, 5);
+  ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, -18);
+  for (let i = 0; i < 3; i++) {
+    const bx = hx - en.w*0.1 + i * en.w*0.08;
+    ctx.beginPath();
+    ctx.moveTo(bx-4, hy-en.h*0.16); ctx.lineTo(bx+4, hy-en.h*0.16); ctx.lineTo(bx, hy-en.h*0.28);
+    ctx.fill();
+  }
+  // glowing molten lower jaw, bridging out from the snout like dripping magma
+  const jawGlow = 0.75 + 0.25 * Math.sin(frame*0.2);
+  ctx.save();
+  ctx.globalAlpha = jawGlow;
+  ctx.fillStyle = en.colorAccent;
+  roundRect(ctx, hx + en.w*0.05, hy + en.h*0.05, en.w*0.18, en.h*0.11, 5);
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = en.colorAccent;
+  for (const dx of [0, 6, 12]) {
+    const dripLen = 3 + 3 * Math.sin(frame*0.13 + dx);
+    ctx.beginPath();
+    ctx.moveTo(hx+en.w*0.06+dx, hy+en.h*0.16);
+    ctx.lineTo(hx+en.w*0.06+dx+2, hy+en.h*0.16+dripLen);
+    ctx.lineTo(hx+en.w*0.06+dx-2, hy+en.h*0.16+dripLen);
+    ctx.fill();
+  }
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(hx - en.w*0.05, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.02, hy - en.h*0.42);
+  ctx.lineTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.2, hy - en.h*0.4);
+  ctx.lineTo(hx + en.w*0.24, hy - en.h*0.14);
+  ctx.fill();
+  const eyeGlow = en.telegraph ? (0.6 + 0.4*Math.sin(frame*0.8)) : 1;
+  ctx.globalAlpha = eyeGlow;
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath(); ctx.arc(hx+en.w*0.02, hy-en.h*0.08, 3.4, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
 function drawBossDragon(en) {
