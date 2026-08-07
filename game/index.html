@@ -395,6 +395,9 @@ const player = {
   hammerThrow: null,   // {x,y,vx,vy,returning,hitSet} while the hammer is away from hand
   dashSpecial: null,   // {hitSet} while the dual-dagger gale dash is resolving
   skyAxe: null,        // {x,y} launch point while the greataxe is thrown skyward
+  rootedTimer: 0,      // can't move while this is > 0 - the jungle boss's vine bind
+  // which story bosses have been beaten this run - gates each level's portal home
+  bossDefeated: { volcano:false, ocean:false, sky:false, jungle:false },
   // potions (do not regenerate - only refilled by picking up more, or a fresh run)
   hpPotions: 3, maxHpPotions: 3,
   fpPotions: 3, maxFpPotions: 3,
@@ -491,7 +494,8 @@ function makeGroundEnemy(x, groundY, cfg) {
     projectileKind: cfg.projectileKind || 'bomb',
     colorMain: cfg.colorMain || '#3a3a44', colorAccent: cfg.colorAccent || '#e8e8ee',
     bossBurstCooldown: 0,
-    buried: !!cfg.buried, emerging: false, emergeTimer: 0, emergeDuration: 0
+    buried: !!cfg.buried, emerging: false, emergeTimer: 0, emergeDuration: 0,
+    signature: cfg.signature || null
   };
 }
 
@@ -506,7 +510,8 @@ function makeFlyingEnemy(x, y, cfg) {
     attackMode: cfg.attackMode || 'dash',
     projectileKind: cfg.projectileKind || 'bomb',
     colorMain: cfg.colorMain || '#555c66', colorAccent: cfg.colorAccent || '#e8453f',
-    bossBurstCooldown: 0
+    bossBurstCooldown: 0,
+    signature: cfg.signature || null, galeDashesLeft: 0, galeFollowup: false
   };
 }
 
@@ -527,7 +532,7 @@ const LEVEL_DEFS = {
     ]
   },
   volcano: {
-    name: '火山關卡', isVillage: false,
+    name: '火山關卡', isVillage: false, requiresBoss: true,
     grunts: ['熔岩怪', '火焰法師'], bossName: '熔岩土龍',
     theme: { sky1:'#3a1408', sky2:'#7a2c10', sky3:'#e8813a', hill:'#4a1c0c', focal:'volcano' },
     makeEnemies: () => [
@@ -535,11 +540,11 @@ const LEVEL_DEFS = {
       makeFlyingEnemy(1050, GROUND_Y-150, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
       makeGroundEnemy(1620, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
       makeFlyingEnemy(1950, GROUND_Y-130, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
-      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a' })
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a', signature:'lava' })
     ]
   },
   ocean: {
-    name: '海底關卡', isVillage: false,
+    name: '海底關卡', isVillage: false, requiresBoss: true,
     grunts: ['寄居蟹怪', '大章魚'], bossName: '深海龍王',
     theme: { sky1:'#0a2440', sky2:'#0f4d6b', sky3:'#7fc9d6', hill:'#0d3550', focal:'bubble' },
     makeEnemies: () => [
@@ -547,11 +552,11 @@ const LEVEL_DEFS = {
       makeFlyingEnemy(1050, GROUND_Y-150, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
       makeGroundEnemy(1620, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
       makeFlyingEnemy(1950, GROUND_Y-130, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
-      makeFlyingEnemy(2750, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff' })
+      makeFlyingEnemy(2750, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff', signature:'ink' })
     ]
   },
   sky: {
-    name: '天空關卡', isVillage: false,
+    name: '天空關卡', isVillage: false, requiresBoss: true,
     grunts: ['極速燕子', '貓頭鷹伯爵'], bossName: '飛龍亞基爾',
     theme: { sky1:'#1a3a6e', sky2:'#4c78c0', sky3:'#dcefff', hill:'#2e4f86', focal:'cloud' },
     makeEnemies: () => [
@@ -559,11 +564,11 @@ const LEVEL_DEFS = {
       makeFlyingEnemy(1050, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
       makeFlyingEnemy(1620, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
       makeFlyingEnemy(1950, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
-      makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff' })
+      makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff', signature:'gale' })
     ]
   },
   jungle: {
-    name: '叢林關卡', isVillage: false,
+    name: '叢林關卡', isVillage: false, requiresBoss: true,
     grunts: ['藤蔓怪', '潛伏藤蔓'], bossName: '草神狼',
     theme: { sky1:'#0f2e14', sky2:'#1f5c2a', sky3:'#a8d98a', hill:'#173d1e', focal:'canopy' },
     makeEnemies: () => [
@@ -571,7 +576,7 @@ const LEVEL_DEFS = {
       makeGroundEnemy(780, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true }),
       makeGroundEnemy(1550, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
       makeGroundEnemy(1650, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true }),
-      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0' })
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0', signature:'vine' })
     ]
   },
   village: {
@@ -604,16 +609,20 @@ const ARENA_GRUNT_FACTORIES = [
 ];
 const ARENA_BOSS_X = ARENA_WIDTH / 2;
 const ARENA_BOSS_FACTORIES = [
-  () => makeGroundEnemy(ARENA_BOSS_X, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a' }),
-  () => makeFlyingEnemy(ARENA_BOSS_X, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff' }),
-  () => makeFlyingEnemy(ARENA_BOSS_X, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff' }),
-  () => makeGroundEnemy(ARENA_BOSS_X, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0' })
+  () => makeGroundEnemy(ARENA_BOSS_X, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a', signature:'lava' }),
+  () => makeFlyingEnemy(ARENA_BOSS_X, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff', signature:'ink' }),
+  () => makeFlyingEnemy(ARENA_BOSS_X, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff', signature:'gale' }),
+  () => makeGroundEnemy(ARENA_BOSS_X, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0', signature:'vine' })
 ];
 
 let arenaWave = 0;
 let arenaWaveDelay = 40;   // frames until the next wave spawns, once the current one is cleared
 let arenaBanner = '';      // brief "第 N 波" / "首領來襲！" text shown when a wave spawns
 let arenaBannerTimer = 0;
+
+// Frames remaining to show the "all four bosses defeated" congratulations banner -
+// set once, the moment the last of the four story bosses falls.
+let worldCompleteBanner = 0;
 
 function spawnArenaWave() {
   arenaWave++;
@@ -892,6 +901,92 @@ function explodeAt(cx, cy, radius, dmg) {
   if (d < radius) damagePlayer(dmg, 40);
 }
 
+// ---------- Ground hazards (a boss signature move can leave lingering danger zones) ----------
+let groundHazards = [];
+function spawnGroundHazard(x, groundY, kind, life, dmgPerTick) {
+  groundHazards.push({ x, groundY, kind, life, maxLife: life, dmgPerTick, tickTimer: 0 });
+}
+function updateGroundHazards() {
+  for (const hz of groundHazards) {
+    hz.life--;
+    if (hz.tickTimer > 0) hz.tickTimer--;
+    const hb = { x: hz.x - 24, y: hz.groundY - 16, w: 48, h: 16 };
+    if (hz.tickTimer <= 0 && rectsOverlap(hb, player)) {
+      damagePlayer(hz.dmgPerTick, 20);
+      hz.tickTimer = 24;
+    }
+  }
+  groundHazards = groundHazards.filter(hz => hz.life > 0);
+}
+function drawGroundHazards() {
+  for (const hz of groundHazards) {
+    const t = Math.max(0, hz.life / hz.maxLife);
+    ctx.save();
+    ctx.translate(hz.x - camera.x, hz.groundY);
+    if (hz.kind === 'vine') {
+      ctx.globalAlpha = Math.min(1, t * 1.6);
+      ctx.fillStyle = '#3d7a2a';
+      for (const ox of [-14, 0, 14]) {
+        ctx.beginPath();
+        ctx.moveTo(ox - 5, 2); ctx.lineTo(ox + 5, 2); ctx.lineTo(ox, -22 * t - 4);
+        ctx.fill();
+      }
+      ctx.strokeStyle = '#1e4a12';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      ctx.globalAlpha = 0.55 + 0.25 * Math.sin(frame * 0.3);
+      const grad = ctx.createRadialGradient(0, -4, 2, 0, -4, 28);
+      grad.addColorStop(0, '#ffd35c');
+      grad.addColorStop(1, '#a8200a');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(0, -4, 28 * Math.max(0.35, t), 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+// Boss "signature move" - the every-3rd-attack burst dispatches here for the four
+// story bosses instead of the generic AoE explosion, so each one reads as unique.
+function resolveBossSignature(en) {
+  if (en.signature === 'lava') {
+    // 熔岩土龍: breathes a line of molten pools that linger and keep burning
+    const dir = en.dir || (player.x > en.x ? 1 : -1);
+    for (let i = 0; i < 3; i++) {
+      spawnGroundHazard(en.x + en.w/2 + dir * (50 + i * 58), en.groundY, 'lava', 260, en.dmg * 0.35);
+    }
+  } else if (en.signature === 'ink') {
+    // 深海龍王: a wide fan of ink bolts instead of one bolt
+    const baseAng = Math.atan2((player.y + player.h/2) - (en.y + en.h/2), (player.x + player.w/2) - (en.x + en.w/2));
+    for (let i = -2; i <= 2; i++) {
+      const ang = baseAng + i * 0.22;
+      spawnProjectile(en.x + en.w/2, en.y + en.h/2, Math.cos(ang) * 5.5, Math.sin(ang) * 5.5, en.dmg * 0.7, 'ink');
+    }
+  } else if (en.signature === 'gale') {
+    // 飛龍亞基爾: a rapid triple dash instead of a single pass
+    en.galeDashesLeft = 2;
+    const dx = (player.x + player.w/2) - (en.x + en.w/2), dy = (player.y + player.h/2) - (en.y + en.h/2);
+    const len = Math.hypot(dx, dy) || 1;
+    en.dashDirX = dx / len; en.dashDirY = dy / len;
+    en.dashing = true;
+    en.dashTimer = 0;
+  } else if (en.signature === 'vine') {
+    // 草神狼: thorny vines erupt in a ring around it and briefly root anyone caught
+    for (let i = 0; i < 6; i++) {
+      const ang = (Math.PI * 2 * i) / 6;
+      spawnGroundHazard(en.x + en.w/2 + Math.cos(ang) * 70, en.groundY, 'vine', 90, en.dmg * 0.5);
+    }
+    if (Math.hypot((player.x+player.w/2)-(en.x+en.w/2), (player.y+player.h/2)-(en.y+en.h/2)) < 110) {
+      player.rootedTimer = 50;
+    }
+  } else {
+    explodeAt(en.x + en.w/2, en.y + en.h/2, 100, en.dmg * 1.6);
+  }
+}
+
 // ---------- Weapon select screen ----------
 const weaponOrder = ['sword','hammer','spear'];
 let menuSelectIndex = 0;
@@ -966,6 +1061,8 @@ function startGame(weaponKey) {
   player.unlockedWeapons = new Set(['sword', 'hammer', 'spear']);
   player.shield = SHIELDS.none;
   player.unlockedShields = new Set(['none']);
+  player.bossDefeated = { volcano:false, ocean:false, sky:false, jungle:false };
+  worldCompleteBanner = 0;
   frame = 0;
   enterLevel('redmoon');
 }
@@ -994,6 +1091,7 @@ function enterLevel(levelId) {
   player.hammerThrow = null;
   player.dashSpecial = null;
   player.skyAxe = null;
+  player.rootedTimer = 0;
   player.potionCooldown = 0;
   camera.x = 0;
   levelTimeLeft = (def.isVillage || def.isArena) ? Infinity : 130*60;
@@ -1003,6 +1101,7 @@ function enterLevel(levelId) {
   particles = [];
   projectiles = [];
   playerProjectiles = [];
+  groundHazards = [];
   if (levelId === 'arena') { arenaWave = 0; arenaWaveDelay = 40; arenaBanner = ''; arenaBannerTimer = 0; }
   state = 'playing';
 }
@@ -1014,8 +1113,11 @@ function updatePlayer() {
   if (overlay) return; // frozen while a village shop/quest modal is open
 
   player.blocking = !!keys['KeyL'] && player.attackWindup === 0 && !player.attacking;
+  if (player.rootedTimer > 0) player.rootedTimer--;
 
-  const speed = player.blocking ? (player.shield.locksMovement ? 0 : (player.shield.fastBlock ? 4.1 : 1.3)) : 4.1;
+  const speed = player.rootedTimer > 0 ? 0
+    : player.blocking ? (player.shield.locksMovement ? 0 : (player.shield.fastBlock ? 4.1 : 1.3))
+    : 4.1;
   let moveInput = 0;
   if (keys['ArrowLeft'] || keys['KeyA']) moveInput -= 1;
   if (keys['ArrowRight'] || keys['KeyD']) moveInput += 1;
@@ -1156,9 +1258,14 @@ function updatePlayer() {
     setTimeout(()=>{ if (state==='playing') state = 'lose'; }, 600);
   }
 
-  // reach the portal -> travel back to the village
-  if (!LEVEL_DEFS[currentLevelId].isVillage && player.x > LEVEL_WIDTH - 160) {
-    enterLevel('village');
+  // reach the portal -> travel back to the village, but only once it's actually
+  // there - story levels keep it hidden (and this trigger inert) until their boss falls
+  {
+    const def = LEVEL_DEFS[currentLevelId];
+    const portalReady = !def.requiresBoss || player.bossDefeated[currentLevelId];
+    if (!def.isVillage && portalReady && player.x > LEVEL_WIDTH - 160) {
+      enterLevel('village');
+    }
   }
 
   updateCoins();
@@ -1458,6 +1565,12 @@ function damageEnemy(en, dmg) {
   if (en.hp <= 0 && !en.dead) {
     en.dead = true;
     if (currentLevelId === 'arena') player.gold += en.isBoss ? 30 : 3;
+    if (en.isBoss && LEVEL_DEFS[currentLevelId] && LEVEL_DEFS[currentLevelId].requiresBoss) {
+      const wasComplete = QUEST_LEVEL_IDS.every(id => player.bossDefeated[id]);
+      player.bossDefeated[currentLevelId] = true;
+      const nowComplete = QUEST_LEVEL_IDS.every(id => player.bossDefeated[id]);
+      if (!wasComplete && nowComplete) worldCompleteBanner = 300;
+    }
     if (en.type === 'bomb') {
       en.exploding = true;
       en.explodeTimer = 30;
@@ -1544,7 +1657,7 @@ function updateEnemies() {
           en.telegraph = false;
           en.attackCooldown = en.burst ? 160 : 110;
           if (en.burst) {
-            explodeAt(en.x+en.w/2, en.y+en.h/2, 100, en.dmg*1.6);
+            resolveBossSignature(en);
           } else if (en.attackMode === 'melee') {
             if (rectsOverlap(en, player)) damagePlayer(en.dmg);
           } else {
@@ -1563,14 +1676,27 @@ function updateEnemies() {
         en.chargeTimer--;
         if (en.chargeTimer <= 0) {
           en.charging = false;
-          if (en.attackMode === 'cast') {
-            const len = Math.hypot(dx,dy) || 1;
-            spawnCastProjectile(en, dx/len, dy/len);
-            en.attackCooldown = en.isBoss ? 130 : 90;
-          } else {
+          if (en.galeFollowup) {
+            // mid-combo dash from a triggered "gale" signature - not a fresh decision
+            en.galeFollowup = false;
             en.dashing = true;
             const len = Math.hypot(dx,dy) || 1;
             en.dashDirX = dx/len; en.dashDirY = dy/len;
+          } else {
+            en.atkCount = (en.atkCount || 0) + 1;
+            const burst = en.isBoss && (en.atkCount % 3 === 0);
+            if (burst) {
+              resolveBossSignature(en);
+              en.attackCooldown = 150;
+            } else if (en.attackMode === 'cast') {
+              const len = Math.hypot(dx,dy) || 1;
+              spawnCastProjectile(en, dx/len, dy/len);
+              en.attackCooldown = en.isBoss ? 130 : 90;
+            } else {
+              en.dashing = true;
+              const len = Math.hypot(dx,dy) || 1;
+              en.dashDirX = dx/len; en.dashDirY = dy/len;
+            }
           }
         }
       } else if (!en.dashing) {
@@ -1588,7 +1714,16 @@ function updateEnemies() {
         en.x += en.dashDirX * en.speed * 3.2;
         en.y += en.dashDirY * en.speed * 3.2;
         en.dashTimer++;
-        if (en.dashTimer > 22) { en.dashing = false; en.dashTimer=0; }
+        if (en.dashTimer > 22) {
+          en.dashing = false; en.dashTimer = 0;
+          // 飛龍亞基爾's "gale" signature: chain into another dash right away
+          if (en.galeDashesLeft > 0) {
+            en.galeDashesLeft--;
+            en.charging = true;
+            en.chargeTimer = 10;
+            en.galeFollowup = true;
+          }
+        }
       }
       en.x = Math.max(0, Math.min(LEVEL_WIDTH - en.w, en.x));
 
@@ -1696,6 +1831,44 @@ function drawHUD() {
     }
     ctx.textAlign = 'left';
   }
+}
+
+// 草神狼's vine bind: a few thorny vines wrap the player's feet while rooted.
+function drawRootedEffect() {
+  ctx.save();
+  ctx.translate(player.x + player.w/2, player.y + player.h);
+  ctx.strokeStyle = '#3d7a2a';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 3; i++) {
+    const ox = (i - 1) * 12;
+    const sway = Math.sin(frame * 0.3 + i) * 3;
+    ctx.beginPath();
+    ctx.moveTo(ox, 0);
+    ctx.quadraticCurveTo(ox + sway, -10, ox, -20);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawWorldCompleteBanner() {
+  if (worldCompleteBanner <= 0) return;
+  const elapsed = 300 - worldCompleteBanner;
+  let alpha = 1;
+  if (elapsed < 20) alpha = elapsed / 20;
+  else if (worldCompleteBanner < 60) alpha = worldCompleteBanner / 60;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, H/2 - 70, W, 140);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd35c';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillText('🏆 四大魔王已全數討伐！', W/2, H/2 - 14);
+  ctx.fillStyle = '#fff';
+  ctx.font = '15px sans-serif';
+  ctx.fillText('第二個世界的大門正在成形...敬請期待', W/2, H/2 + 22);
+  ctx.restore();
+  ctx.textAlign = 'left';
 }
 
 function drawDragon(p) {
@@ -2735,6 +2908,21 @@ function drawPlatform(p) {
   ctx.strokeRect(p.x - camera.x, p.y, p.w, 4);
 }
 
+function drawBossGateHint() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  const text = `擊敗 ${LEVEL_DEFS[currentLevelId].bossName} 後，回村莊的傳送門才會出現`;
+  const w = ctx.measureText(text).width + 24;
+  roundRect(ctx, W/2 - w/2, 10, w, 26, 6);
+  ctx.fill();
+  ctx.fillStyle = '#ffcf4a';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(text, W/2, 28);
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
 function drawPortal(x, groundY) {
   ctx.save();
   ctx.translate(x - camera.x, groundY);
@@ -2922,8 +3110,10 @@ function update() {
   updateEnemies();
   updateProjectiles();
   updatePlayerProjectiles();
+  updateGroundHazards();
   updateParticles();
   updateArena();
+  if (worldCompleteBanner > 0) worldCompleteBanner--;
 }
 
 function render() {
@@ -2939,7 +3129,14 @@ function render() {
     drawVillageProps();
   } else {
     drawCoins();
-    drawPortal(LEVEL_WIDTH - 80, GROUND_Y);
+    drawGroundHazards();
+    // the portal home doesn't appear until this level's boss is beaten, so there's
+    // no way to just run past a story boss to skip the fight
+    if (!levelDef.requiresBoss || player.bossDefeated[currentLevelId]) {
+      drawPortal(LEVEL_WIDTH - 80, GROUND_Y);
+    } else if (levelDef.requiresBoss) {
+      drawBossGateHint();
+    }
   }
 
   for (const en of enemies) {
@@ -2960,10 +3157,12 @@ function render() {
   ctx.save();
   ctx.translate(-camera.x, 0);
   if (!player.dead) drawDragon(player);
+  if (player.rootedTimer > 0) drawRootedEffect();
   drawParticles();
   ctx.restore();
 
   drawHUD();
+  drawWorldCompleteBanner();
 
   if (state === 'lose') renderOverlay('挑戰失敗', '按 R 重新挑戰', '#e0453f');
   if (overlay === 'weaponshop') renderWeaponShopOverlay();
@@ -3382,10 +3581,11 @@ function renderQuestOverlay() {
 
   QUEST_LEVEL_IDS.forEach((id, i) => {
     const def = LEVEL_DEFS[id];
+    const defeated = player.bossDefeated[id];
     const x = startX + i * (cw + gap);
     villageCardRects.push({x, y, w:cw, h:ch, id});
 
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillStyle = defeated ? 'rgba(76,193,90,0.14)' : 'rgba(255,255,255,0.08)';
     roundRect(ctx, x, y, cw, ch, 12);
     ctx.fill();
     ctx.strokeStyle = '#4CC15A';
@@ -3401,8 +3601,8 @@ function renderQuestOverlay() {
     ctx.font = '11px sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.8)';
     ctx.fillText('敵人：' + def.grunts.join('、'), x+cw/2, y+90);
-    ctx.fillStyle = '#ff8a6a';
-    ctx.fillText('BOSS：' + def.bossName, x+cw/2, y+108);
+    ctx.fillStyle = defeated ? '#4CC15A' : '#ff8a6a';
+    ctx.fillText((defeated ? '✅ 已擊敗 ' : 'BOSS：') + def.bossName, x+cw/2, y+108);
 
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = '11px sans-serif';
