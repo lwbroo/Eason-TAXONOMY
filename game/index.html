@@ -62,7 +62,7 @@
 <body>
 <div id="game-wrap">
   <canvas id="game" width="960" height="600"></canvas>
-  <div id="hint">←→移動　⎵跳躍　J攻擊(長按=特技)　L防禦　1/2 藥水</div>
+  <div id="hint">←→移動　J攻擊(長按=特技)　K包包　⎵跳躍　L防禦　1/2 藥水　I 專屬裝備</div>
   <div id="touch-controls">
     <div id="tc-joystick"><div id="tc-joystick-knob"></div></div>
     <div class="tc-group">
@@ -289,7 +289,7 @@ const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the s
 
 // ---------- Game state ----------
 let state = 'menu'; // menu -> playing -> lose
-let overlay = null;  // null | 'weaponshop' | 'armorshop' | 'shieldshop' | 'quest' - modal UI shown over the village
+let overlay = null;  // null | 'weaponshop' | 'armorshop' | 'shieldshop' | 'armorequip' | 'quest' | 'bag' - modal UI shown over the current scene
 
 // ---------- Shields ----------
 const SHIELDS = {
@@ -315,6 +315,49 @@ const SHIELDS = {
   }
 };
 const PURCHASABLE_SHIELD_KEYS = ['none', 'greatshield', 'spikeshield', 'buckler', 'manashield'];
+
+// ---------- Armor (passive, always-on damage reduction - stacks with shield blocking) ----------
+const ARMORS = {
+  none: {
+    name: '無盔甲', key:'none',
+    desc: '沒有額外防禦加成', defenseReduction: 0, thorns: false
+  },
+  leather: {
+    name: '皮鎧甲', key:'leather', price: 25,
+    desc: '輕便的皮革護甲，降低所有傷害 12%', defenseReduction: 0.12, thorns: false
+  },
+  spike: {
+    name: '尖刺鎧甲', key:'spike', price: 50,
+    desc: '降低傷害 18%，被近戰擊中時會自動反傷附近敵人', defenseReduction: 0.18, thorns: true
+  },
+  chain: {
+    name: '鎖鏈鎧甲', key:'chain', price: 85,
+    desc: '紮實的鎖鏈甲，降低所有傷害 30%', defenseReduction: 0.3, thorns: false
+  },
+  diamond: {
+    name: '鑽石鎧甲', key:'diamond', price: 140,
+    desc: '最頂級的鎧甲，降低所有傷害 45%', defenseReduction: 0.45, thorns: false
+  }
+};
+const PURCHASABLE_ARMOR_KEYS = ['none', 'leather', 'spike', 'chain', 'diamond'];
+
+// ---------- Gadgets (rare monster drops - a second, independent attack/ability slot) ----------
+// Each maps back to the grunt kind that drops it, so damageEnemy() knows what to roll for.
+const GADGETS = {
+  fireball: { name:'火球', key:'fireball', dropKind:'lava',
+    desc:'像熔岩怪一樣往前投擲火球', dmg:16, cooldown:38, staminaCost:14, speed:7, color:'#ff8a3a' },
+  staff: { name:'法師權杖', key:'staff', dropKind:'mage',
+    desc:'發射會自動追蹤敵人的魔法彈', dmg:13, cooldown:55, staminaCost:16, speed:6, homing:true, color:'#ff7a3a' },
+  bubble: { name:'火焰泡', key:'bubble', dropKind:'owl',
+    desc:'連續發射的小火焰泡，傷害低但可連發', dmg:6, cooldown:12, staminaCost:6, speed:8, color:'#ffb37a' },
+  bomb: { name:'炸彈', key:'bomb', dropKind:'bomb',
+    desc:'拋出會落地爆炸的炸彈，範圍傷害很高', dmg:24, cooldown:75, staminaCost:22, speed:6.5, arc:true, explodeRadius:85, color:'#c9c9d2' },
+  wings: { name:'燕子之翼', key:'wings', dropKind:'bird',
+    desc:'長按跳躍鍵可以在天空飛行 5 秒', passive:true, flightTime:300, color:'#dbe9ff' }
+};
+const GADGET_DROP_CHANCE = 0.22;
+const GADGET_KIND_TO_KEY = { lava:'fireball', mage:'staff', owl:'bubble', bomb:'bomb', bird:'wings' };
+
 let selectedWeapon = 'sword';
 let levelTimeLeft = 130 * 60; // frames (~130s at 60fps)
 let frame = 0;
@@ -345,9 +388,10 @@ const VILLAGE_PLATFORMS = [
   {x:0, y:GROUND_Y, w:VILLAGE_WIDTH, h:80}
 ];
 const VILLAGE_WEAPON_SHOP_X = 480;
-const VILLAGE_ARMOR_SHOP_X = 980;
-const VILLAGE_SHIELD_SHOP_X = 1300;
-const VILLAGE_TREE_X = 1600;
+const VILLAGE_ARMOR_SHOP_X = 900;
+const VILLAGE_SHIELD_SHOP_X = 1320;
+const VILLAGE_ARMOR_EQUIP_SHOP_X = 1740;
+const VILLAGE_TREE_X = 2100;
 
 // The arena is one flat platform, like the village, but with waves of enemies and a
 // portal at the far end so it's an optional side challenge, not a story level.
@@ -382,6 +426,8 @@ const player = {
   weapon: WEAPONS.sword,
   shield: SHIELDS.none,
   unlockedShields: new Set(['none']),
+  armor: ARMORS.none,
+  unlockedArmors: new Set(['none']),
   blocking: false,
   blockFlash: 0,
   dead: false,
@@ -396,6 +442,12 @@ const player = {
   dashSpecial: null,   // {hitSet} while the dual-dagger gale dash is resolving
   skyAxe: null,        // {x,y} launch point while the greataxe is thrown skyward
   rootedTimer: 0,      // can't move while this is > 0 - the jungle boss's vine bind
+  // gadgets: rare monster drops usable independently of the equipped weapon
+  unlockedGadgets: new Set(),
+  equippedGadget: null,
+  gadgetCooldown: 0,
+  flightTimer: 0,       // frames of wings-gadget flight used since the last landing
+  flightUsed: false,
   // which story bosses have been beaten this run - gates each level's portal home
   bossDefeated: { volcano:false, ocean:false, sky:false, jungle:false },
   // potions (do not regenerate - only refilled by picking up more, or a fresh run)
@@ -416,7 +468,7 @@ function currentWeaponDmg() {
 // ---------- Village shop ----------
 const SHOP_ITEMS = [
   { id:'weapon',  name:'武器強化', desc:'+4 攻擊力',            baseCost:20, costStep:10, maxLevel:5 },
-  { id:'armor',   name:'護甲',    desc:'+20 上限HP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
+  { id:'armor',   name:'血量強化', desc:'+20 上限HP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
   { id:'mana',    name:'魔力強化', desc:'+20 上限MP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
   { id:'hpflask', name:'HP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 },
   { id:'fpflask', name:'MP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 }
@@ -445,6 +497,17 @@ function selectOrBuyShield(key) {
     player.gold -= s.price;
     player.unlockedShields.add(key);
     player.shield = s;
+  }
+}
+function selectOrBuyArmor(key) {
+  const a = ARMORS[key];
+  if (!a) return;
+  if (player.unlockedArmors.has(key)) {
+    player.armor = a;
+  } else if (a.price && player.gold >= a.price) {
+    player.gold -= a.price;
+    player.unlockedArmors.add(key);
+    player.armor = a;
   }
 }
 function shopItemCost(item) {
@@ -624,11 +687,21 @@ let arenaBannerTimer = 0;
 // set once, the moment the last of the four story bosses falls.
 let worldCompleteBanner = 0;
 
+// Later waves aren't just bigger - each monster is individually tougher too, so the
+// arena keeps getting harder even once the enemy count caps out at 10.
+function applyArenaScaling(en) {
+  const scale = 1 + (arenaWave - 1) * 0.08;
+  en.hp = Math.round(en.hp * scale);
+  en.maxHp = en.hp;
+  en.dmg = Math.round(en.dmg * scale);
+}
+
 function spawnArenaWave() {
   arenaWave++;
   const isBossWave = arenaWave % 5 === 0;
   if (isBossWave) {
     const boss = ARENA_BOSS_FACTORIES[Math.floor(Math.random() * ARENA_BOSS_FACTORIES.length)]();
+    applyArenaScaling(boss);
     enemies = [boss];
     arenaBanner = `第 ${arenaWave} 波：首領來襲－${boss.name}！`;
   } else {
@@ -637,7 +710,9 @@ function spawnArenaWave() {
     for (let i = 0; i < count; i++) {
       const factory = ARENA_GRUNT_FACTORIES[Math.floor(Math.random() * ARENA_GRUNT_FACTORIES.length)];
       const x = 150 + Math.random() * (ARENA_WIDTH - 500);
-      spawned.push(factory(x));
+      const en = factory(x);
+      applyArenaScaling(en);
+      spawned.push(en);
     }
     enemies = spawned;
     arenaBanner = `第 ${arenaWave} 波`;
@@ -697,6 +772,75 @@ function drawCoins() {
     ctx.beginPath(); ctx.arc(-2.5, -2.5, c.r*0.35, 0, Math.PI*2); ctx.fill();
     ctx.restore();
   }
+}
+
+// ---------- Gadget drops (grunts have a chance to drop their signature item) ----------
+let gadgetDrops = [];
+let gadgetPickupBanner = null; // {text, timer} - a brief "獲得專屬裝備" toast
+function spawnGadgetDrop(x, y, gadgetKey) {
+  gadgetDrops.push({ x, y, w:20, h:20, vy:-3, gadgetKey, collected:false, phase:Math.random()*Math.PI*2 });
+}
+function updateGadgetDrops() {
+  const hb = {x: player.x, y: player.y, w: player.w, h: player.h};
+  for (const d of gadgetDrops) {
+    if (d.collected) continue;
+    d.vy = Math.min(6, d.vy + 0.4);
+    d.y += d.vy;
+    const floor = groundHeightAt(d.x) - d.h/2;
+    if (d.y > floor) { d.y = floor; d.vy = 0; }
+    if (rectsOverlap(hb, {x:d.x-d.w/2, y:d.y-d.h/2, w:d.w, h:d.h})) {
+      d.collected = true;
+      const g = GADGETS[d.gadgetKey];
+      if (!player.unlockedGadgets.has(d.gadgetKey)) {
+        player.unlockedGadgets.add(d.gadgetKey);
+        if (!player.equippedGadget) player.equippedGadget = d.gadgetKey;
+        spawnSparkleAt(d.x, d.y, g.color);
+        gadgetPickupBanner = { text: `獲得專屬裝備：${g.name}！`, timer: 150 };
+      } else {
+        player.gold += 10;
+        spawnSparkleAt(d.x, d.y, '#f5c542');
+      }
+    }
+  }
+  gadgetDrops = gadgetDrops.filter(d => !d.collected);
+  if (gadgetPickupBanner) {
+    gadgetPickupBanner.timer--;
+    if (gadgetPickupBanner.timer <= 0) gadgetPickupBanner = null;
+  }
+}
+function drawGadgetDrops() {
+  for (const d of gadgetDrops) {
+    if (d.collected) continue;
+    const g = GADGETS[d.gadgetKey];
+    const bob = Math.sin(frame * 0.1 + d.phase) * 3;
+    ctx.save();
+    ctx.translate(d.x - camera.x, d.y + bob);
+    const pulse = 0.6 + 0.4 * Math.sin(frame * 0.15 + d.phase);
+    ctx.globalAlpha = 0.35 * pulse;
+    ctx.fillStyle = g.color;
+    ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g.color;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -10); ctx.lineTo(10, 0); ctx.lineTo(0, 10); ctx.lineTo(-10, 0);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+}
+function drawGadgetPickupBanner() {
+  if (!gadgetPickupBanner) return;
+  const alpha = Math.min(1, gadgetPickupBanner.timer / 30);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffe08a';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText(gadgetPickupBanner.text, W/2, 118);
+  ctx.textAlign = 'left';
+  ctx.restore();
 }
 
 // ---------- Particles (hits, explosions, pickups) ----------
@@ -779,18 +923,67 @@ function spawnPlayerArrow(dmg, opts) {
     pierce, hitSet: pierce ? new Set() : null
   });
 }
+function spawnGadgetProjectile(g) {
+  const dir = { x: player.facing, y: 0 };
+  playerProjectiles.push({
+    x: player.x + player.w/2, y: player.y + player.h/2 - 4,
+    vx: dir.x * g.speed, vy: g.arc ? -g.speed*0.6 : 0,
+    r: g.arc ? 7 : 5, life: g.arc ? 130 : 80, dmg: g.dmg,
+    pierce:false, hitSet:null,
+    homing: !!g.homing, speed: g.speed, arc: !!g.arc, explodeRadius: g.explodeRadius || 0,
+    gadgetColor: g.color
+  });
+}
+function gadgetBombBurst(x, y) {
+  for (let i = 0; i < 14; i++) {
+    const ang = (Math.PI*2*i)/14;
+    addParticle({type:'spark', x, y,
+      vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:22, maxLife:22, size:4+Math.random()*3, color:'#ff9d4d'});
+  }
+}
 function updatePlayerProjectiles() {
   for (const b of playerProjectiles) {
+    if (b.arc) b.vy += GRAVITY * 0.55;
+    if (b.homing) {
+      let target = null, bestD = 260;
+      for (const en of enemies) {
+        if (en.dead || en.buried) continue;
+        const d = Math.hypot((en.x+en.w/2)-b.x, (en.y+en.h/2)-b.y);
+        if (d < bestD) { bestD = d; target = en; }
+      }
+      if (target) {
+        const dx = (target.x+target.w/2)-b.x, dy = (target.y+target.h/2)-b.y;
+        const len = Math.hypot(dx,dy) || 1;
+        // steer toward a fixed cruise speed, not the projectile's own current speed -
+        // otherwise a shot fired away from its target decelerates toward zero instead
+        // of actually turning around, since its own (shrinking) speed keeps feeding back in
+        b.vx += (dx/len*b.speed - b.vx) * 0.12;
+        b.vy += (dy/len*b.speed - b.vy) * 0.12;
+      }
+    }
     b.x += b.vx;
     b.y += b.vy;
     b.life--;
-    for (const en of enemies) {
-      if (en.dead || en.buried) continue;
-      if (b.hitSet && b.hitSet.has(en)) continue;
-      if (rectsOverlap({x:b.x-b.r, y:b.y-b.r, w:b.r*2, h:b.r*2}, {x:en.x, y:en.y, w:en.w, h:en.h})) {
-        damageEnemy(en, b.dmg);
-        if (b.pierce) b.hitSet.add(en);
-        else { b.dead = true; break; }
+    if (b.arc && !b.dead) {
+      for (const p of platforms) {
+        if (b.x > p.x && b.x < p.x + p.w && b.y + b.r >= p.y && b.vy >= 0) {
+          resolveSpecialAoeHit(b.dmg, b.explodeRadius, b.x, b.y);
+          gadgetBombBurst(b.x, b.y);
+          b.dead = true;
+          break;
+        }
+      }
+    }
+    if (!b.dead) {
+      for (const en of enemies) {
+        if (en.dead || en.buried) continue;
+        if (b.hitSet && b.hitSet.has(en)) continue;
+        if (rectsOverlap({x:b.x-b.r, y:b.y-b.r, w:b.r*2, h:b.r*2}, {x:en.x, y:en.y, w:en.w, h:en.h})) {
+          damageEnemy(en, b.dmg);
+          if (b.arc) { resolveSpecialAoeHit(b.dmg*0.6, b.explodeRadius, b.x, b.y); gadgetBombBurst(b.x, b.y); }
+          if (b.pierce) b.hitSet.add(en);
+          else { b.dead = true; break; }
+        }
       }
     }
     if (b.life <= 0 || b.x < -60 || b.x > LEVEL_WIDTH + 60 || b.y < -500 || b.y > H + 500) b.dead = true;
@@ -799,6 +992,16 @@ function updatePlayerProjectiles() {
 }
 function drawPlayerProjectiles() {
   for (const b of playerProjectiles) {
+    if (b.gadgetColor) {
+      ctx.save();
+      ctx.translate(b.x - camera.x, b.y);
+      ctx.fillStyle = b.gadgetColor;
+      ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath(); ctx.arc(0, 0, b.r*1.8, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+      continue;
+    }
     ctx.save();
     ctx.translate(b.x - camera.x, b.y);
     ctx.rotate(Math.atan2(b.vy, b.vx));
@@ -1040,6 +1243,21 @@ canvas.addEventListener('click', (e) => {
         selectOrBuyShield(card.id);
       }
     }
+  } else if (overlay === 'armorequip') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        selectOrBuyArmor(card.id);
+      }
+    }
+  } else if (overlay === 'bag') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        if (card.kind === 'weapon') { if (player.unlockedWeapons.has(card.id)) player.weapon = WEAPONS[card.id]; }
+        else if (card.kind === 'gadget') { if (player.unlockedGadgets.has(card.id)) player.equippedGadget = card.id; }
+      }
+    }
   } else if (overlay === 'quest') {
     if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
     for (const card of villageCardRects) {
@@ -1061,6 +1279,10 @@ function startGame(weaponKey) {
   player.unlockedWeapons = new Set(['sword', 'hammer', 'spear']);
   player.shield = SHIELDS.none;
   player.unlockedShields = new Set(['none']);
+  player.armor = ARMORS.none;
+  player.unlockedArmors = new Set(['none']);
+  player.unlockedGadgets = new Set();
+  player.equippedGadget = null;
   player.bossDefeated = { volcano:false, ocean:false, sky:false, jungle:false };
   worldCompleteBanner = 0;
   frame = 0;
@@ -1093,6 +1315,9 @@ function enterLevel(levelId) {
   player.skyAxe = null;
   player.rootedTimer = 0;
   player.potionCooldown = 0;
+  player.gadgetCooldown = 0;
+  player.flightTimer = 0;
+  player.flightUsed = false;
   camera.x = 0;
   levelTimeLeft = (def.isVillage || def.isArena) ? Infinity : 130*60;
   overlay = null;
@@ -1102,6 +1327,8 @@ function enterLevel(levelId) {
   projectiles = [];
   playerProjectiles = [];
   groundHazards = [];
+  gadgetDrops = [];
+  gadgetPickupBanner = null;
   if (levelId === 'arena') { arenaWave = 0; arenaWaveDelay = 40; arenaBanner = ''; arenaBannerTimer = 0; }
   state = 'playing';
 }
@@ -1145,6 +1372,7 @@ function updatePlayer() {
     if (Math.abs(px - VILLAGE_WEAPON_SHOP_X) < 70) overlay = 'weaponshop';
     else if (Math.abs(px - VILLAGE_ARMOR_SHOP_X) < 70) overlay = 'armorshop';
     else if (Math.abs(px - VILLAGE_SHIELD_SHOP_X) < 70) overlay = 'shieldshop';
+    else if (Math.abs(px - VILLAGE_ARMOR_EQUIP_SHOP_X) < 70) overlay = 'armorequip';
     else if (Math.abs(px - VILLAGE_TREE_X) < 70) overlay = 'quest';
     // walking into a shop, not jumping into it - cancel the incidental hop above so
     // physics resume grounded (not mid-air) once the overlay closes again
@@ -1152,7 +1380,18 @@ function updatePlayer() {
   }
   villageJumpPrev = jumpDown;
 
-  player.vy += GRAVITY;
+  // wings gadget: holding jump while airborne (and not exhausted this trip) hovers
+  // instead of falling, for up to GADGETS.wings.flightTime frames
+  let flying = false;
+  if (player.equippedGadget === 'wings' && jumpDown && !player.onGround && !player.flightUsed) {
+    if (player.flightTimer < GADGETS.wings.flightTime) {
+      flying = true;
+      player.flightTimer++;
+      player.vy = -3.2;
+      if (player.flightTimer >= GADGETS.wings.flightTime) player.flightUsed = true;
+    }
+  }
+  if (!flying) player.vy += GRAVITY;
   player.x += player.vx;
   player.y += player.vy;
 
@@ -1175,6 +1414,8 @@ function updatePlayer() {
   if (player.onGround) {
     player.lastGroundX = player.x;
     player.lastGroundY = player.y;
+    player.flightTimer = 0;
+    player.flightUsed = false;
   }
   if (player.y > H + 200) {
     // fell into a gap: respawn on the last safe platform with a penalty instead of an outright kill
@@ -1230,6 +1471,18 @@ function updatePlayer() {
 
   updateSpecial();
 
+  // gadget: I fires the equipped monster-drop gadget (independent of the weapon's own
+  // attack/special and its cooldown) - wings is passive and doesn't use this at all
+  if (player.gadgetCooldown > 0) player.gadgetCooldown--;
+  if (pressedOnce('KeyI', gadgetKeyState) && player.equippedGadget) {
+    const g = GADGETS[player.equippedGadget];
+    if (g && !g.passive && player.gadgetCooldown <= 0 && player.sta >= g.staminaCost) {
+      player.sta -= g.staminaCost;
+      player.gadgetCooldown = g.cooldown;
+      spawnGadgetProjectile(g);
+    }
+  }
+
   // potions: 1 = HP flask, 2 = FP flask - a short shared cooldown stops a held key spamming
   if (player.potionCooldown > 0) player.potionCooldown--;
   if (player.potionCooldown <= 0) {
@@ -1269,20 +1522,25 @@ function updatePlayer() {
   }
 
   updateCoins();
+  updateGadgetDrops();
 }
 const potionKeyState = { hp:{}, fp:{} };
+const gadgetKeyState = {};
 
 // Routes all enemy damage through the shield: blocking cuts damage sharply and
 // chips stamina instead, so timing the block against a telegraphed attack matters.
 function damagePlayer(amount, invulnFrames) {
   if (player.invuln > 0) return;
-  let dmg = amount;
+  // armor is passive and always active; the shield's block reduction (while held) stacks on top
+  let dmg = amount * (1 - (player.armor.defenseReduction || 0));
   if (player.blocking) {
-    dmg = amount * player.shield.blockReduction;
+    dmg = dmg * player.shield.blockReduction;
     if (player.shield.manaCost) player.fp = Math.max(0, player.fp - amount * 0.5);
     else player.sta = Math.max(0, player.sta - amount * 0.5);
     player.blockFlash = 10;
     if (player.shield.thorns) retaliateNearbyEnemy();
+  } else if (player.armor.thorns) {
+    retaliateNearbyEnemy();
   }
   player.hp -= dmg;
   player.invuln = invulnFrames || 45;
@@ -1582,6 +1840,14 @@ function damageEnemy(en, dmg) {
           vx:(Math.random()-0.5)*6, vy:(Math.random()-0.5)*6-2, life:20,maxLife:20, size:3+Math.random()*3, color:'#7fffb0'});
       }
     }
+    // grunts have a chance to drop their signature gadget - keeps kills rewarding
+    // even outside the arena, and outside pure gold
+    if (!en.isBoss) {
+      const gadgetKey = GADGET_KIND_TO_KEY[en.kind];
+      if (gadgetKey && Math.random() < GADGET_DROP_CHANCE) {
+        spawnGadgetDrop(en.x + en.w/2, en.y + en.h/2, gadgetKey);
+      }
+    }
   }
 }
 
@@ -1598,6 +1864,9 @@ function updateEnemies() {
         if (en.explodeTimer === 6) {
           explodeAt(en.x+en.w/2, en.y+en.h/2, en.explodeRadius || 90, en.explodeDmg || 14);
         }
+        // without this, a dead ground enemy's exploding flag would never clear,
+        // so it would linger drawn forever and the arena would never see it as cleared
+        if (en.explodeTimer <= 0) en.exploding = false;
       }
       continue;
     }
@@ -3284,6 +3553,7 @@ function render() {
     drawVillageProps();
   } else {
     drawCoins();
+    drawGadgetDrops();
     drawGroundHazards();
     // the portal home doesn't appear until this level's boss is beaten, so there's
     // no way to just run past a story boss to skip the fight
@@ -3318,11 +3588,14 @@ function render() {
 
   drawHUD();
   drawWorldCompleteBanner();
+  drawGadgetPickupBanner();
 
   if (state === 'lose') renderOverlay('挑戰失敗', '按 R 重新挑戰', '#e0453f');
   if (overlay === 'weaponshop') renderWeaponShopOverlay();
   if (overlay === 'armorshop') renderArmorShopOverlay();
   if (overlay === 'shieldshop') renderShieldShopOverlay();
+  if (overlay === 'armorequip') renderArmorEquipShopOverlay();
+  if (overlay === 'bag') renderBagOverlay();
   if (overlay === 'quest') renderQuestOverlay();
 }
 
@@ -3405,6 +3678,13 @@ function updateShieldShopOverlay() {
   const digitCodes = ['Digit1','Digit2','Digit3','Digit4','Digit5'];
   PURCHASABLE_SHIELD_KEYS.forEach((key, i) => {
     if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) selectOrBuyShield(key);
+  });
+}
+
+function updateArmorEquipShopOverlay() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4','Digit5'];
+  PURCHASABLE_ARMOR_KEYS.forEach((key, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) selectOrBuyArmor(key);
   });
 }
 
@@ -3630,6 +3910,131 @@ function renderShieldShopOverlay() {
   drawOverlayCloseButton();
 }
 
+function drawArmorIcon(key) {
+  ctx.save();
+  if (key === 'leather') {
+    roundRect(ctx, -16, -34, 32, 66, 10);
+    ctx.fillStyle = '#8a6a44';
+    ctx.fill();
+    roundRect(ctx, -10, -26, 20, 50, 6);
+    ctx.fillStyle = '#c9a876';
+    ctx.fill();
+  } else if (key === 'spike') {
+    roundRect(ctx, -16, -34, 32, 66, 10);
+    ctx.fillStyle = '#5a4a4a';
+    ctx.fill();
+    ctx.fillStyle = '#e8e8ee';
+    for (const oy of [-22, -4, 14, 32]) {
+      ctx.beginPath();
+      ctx.moveTo(-6, oy); ctx.lineTo(0, oy-10); ctx.lineTo(6, oy);
+      ctx.fill();
+    }
+  } else if (key === 'chain') {
+    roundRect(ctx, -17, -34, 34, 66, 10);
+    ctx.fillStyle = '#5c6672';
+    ctx.fill();
+    ctx.strokeStyle = '#8f97a3';
+    ctx.lineWidth = 1.5;
+    for (let row = -24; row < 28; row += 10) {
+      for (let col = -10; col < 14; col += 12) {
+        ctx.beginPath(); ctx.arc(col, row, 4, 0, Math.PI*2); ctx.stroke();
+      }
+    }
+  } else if (key === 'diamond') {
+    roundRect(ctx, -17, -34, 34, 66, 10);
+    ctx.fillStyle = '#2a4a5a';
+    ctx.fill();
+    ctx.fillStyle = '#7fe0ff';
+    ctx.beginPath();
+    ctx.moveTo(0, -22); ctx.lineTo(14, -4); ctx.lineTo(0, 14); ctx.lineTo(-14, -4);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#e0fbff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  } else {
+    roundRect(ctx, -14, -30, 28, 58, 10);
+    ctx.fillStyle = '#4a4a52';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, -14, -30, 28, 58, 10);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function renderArmorEquipShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('盔甲商店', W/2, 56);
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 84);
+
+  villageCardRects = [];
+  const cw = 168, ch = 195, gap = 16;
+  const totalW = PURCHASABLE_ARMOR_KEYS.length * cw + (PURCHASABLE_ARMOR_KEYS.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+  const y = 110;
+
+  PURCHASABLE_ARMOR_KEYS.forEach((key, i) => {
+    const a = ARMORS[key];
+    const owned = player.unlockedArmors.has(key);
+    const equipped = player.armor.key === key;
+    const afford = !owned && player.gold >= (a.price || 0);
+    const x = startX + i * (cw + gap);
+    villageCardRects.push({x, y, w:cw, h:ch, id:key});
+
+    ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : (owned || afford) ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.05)';
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.fill();
+    ctx.strokeStyle = equipped ? '#4CC15A' : (owned ? 'rgba(255,255,255,0.4)' : (afford ? '#f5c542' : 'rgba(255,255,255,0.25)'));
+    ctx.lineWidth = equipped ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x+cw/2, y+66);
+    ctx.scale(0.68, 0.68);
+    drawArmorIcon(key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(a.name, x+cw/2, y+116);
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+    wrapFillText(a.desc, x+cw/2, y+134, cw-20, 13);
+
+    if (equipped) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText('裝備中', x+cw/2, y+ch-26);
+    } else if (owned) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('已擁有', x+cw/2, y+ch-26);
+    } else {
+      ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(`${a.price} 金幣`, x+cw/2, y+ch-26);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊${owned ? '裝備' : '購買'}`, x+cw/2, y+ch-10);
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-24);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
 function renderWeaponShopOverlay() {
   ctx.fillStyle = 'rgba(20,10,30,0.7)';
   ctx.fillRect(0, 0, W, H);
@@ -3712,6 +4117,124 @@ function renderWeaponShopOverlay() {
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = '12px sans-serif';
   ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-12);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
+// The bag: a free, no-purchase quick-swap between already-owned weapons and gadgets -
+// usable anywhere (opened with K), not just in the village like the shops above.
+function renderBagOverlay() {
+  ctx.fillStyle = 'rgba(10,10,20,0.75)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.fillText('包包', W/2, 32);
+
+  villageCardRects = [];
+  const ownedWeapons = PURCHASABLE_WEAPON_KEYS.filter(k => player.unlockedWeapons.has(k));
+  const ownedGadgets = Array.from(player.unlockedGadgets);
+
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText('武器', W/2, 56);
+
+  const cw = 100, ch = 92, gap = 8, maxPerRow = 7;
+  const rowPitch = ch + gap + 4;
+  let topY = 64;
+  ownedWeapons.forEach((key, i) => {
+    const row = Math.floor(i / maxPerRow);
+    const col = i % maxPerRow;
+    const itemsInRow = Math.min(maxPerRow, ownedWeapons.length - row * maxPerRow);
+    const rowW = itemsInRow * cw + (itemsInRow - 1) * gap;
+    const startX = W/2 - rowW/2;
+    const x = startX + col * (cw + gap);
+    const y = topY + row * rowPitch;
+
+    const w = WEAPONS[key];
+    const equipped = player.weapon.key === key;
+    villageCardRects.push({x, y, w:cw, h:ch, id:key, kind:'weapon'});
+
+    ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : 'rgba(255,255,255,0.09)';
+    roundRect(ctx, x, y, cw, ch, 10);
+    ctx.fill();
+    ctx.strokeStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = equipped ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 10);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x+cw/2, y+30);
+    ctx.scale(0.5, 0.5);
+    drawWeaponIcon(key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText(w.name, x+cw/2, y+54);
+    ctx.fillStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.6)';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText(equipped ? '裝備中' : '點擊裝備', x+cw/2, y+ch-10);
+  });
+
+  const weaponRows = Math.ceil(ownedWeapons.length / maxPerRow) || 1;
+  let gadgetTopY = topY + weaponRows * rowPitch + 24;
+
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText('專屬裝備 (按 I 使用)', W/2, gadgetTopY - 8);
+  gadgetTopY += 8;
+
+  if (ownedGadgets.length === 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('尚未取得任何專屬裝備 - 擊敗怪物有機會掉落', W/2, gadgetTopY + 30);
+  } else {
+    const gcw = 130, gch = 100, ggap = 10;
+    const totalW = ownedGadgets.length * gcw + (ownedGadgets.length - 1) * ggap;
+    const startX = W/2 - totalW/2;
+    ownedGadgets.forEach((key, i) => {
+      const g = GADGETS[key];
+      const equipped = player.equippedGadget === key;
+      const x = startX + i * (gcw + ggap);
+      const y = gadgetTopY;
+      villageCardRects.push({x, y, w:gcw, h:gch, id:key, kind:'gadget'});
+
+      ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : 'rgba(255,255,255,0.09)';
+      roundRect(ctx, x, y, gcw, gch, 10);
+      ctx.fill();
+      ctx.strokeStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = equipped ? 2.5 : 1.5;
+      roundRect(ctx, x, y, gcw, gch, 10);
+      ctx.stroke();
+
+      ctx.save();
+      ctx.translate(x+gcw/2, y+30);
+      ctx.fillStyle = g.color;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -14); ctx.lineTo(14, 0); ctx.lineTo(0, 14); ctx.lineTo(-14, 0);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.restore();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(g.name, x+gcw/2, y+58);
+      ctx.font = '9px sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      wrapFillText(g.desc, x+gcw/2, y+72, gcw-14, 11);
+      ctx.fillStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.6)';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(equipped ? '裝備中' : '點擊裝備', x+gcw/2, y+gch-8);
+    });
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('按 K／J／L／跳躍鍵，或點右上角 ✕ 關閉包包', W/2, H-16);
   ctx.textAlign = 'left';
   drawOverlayCloseButton();
 }
@@ -3822,6 +4345,7 @@ function drawVillageProps() {
   drawShopBuilding(VILLAGE_WEAPON_SHOP_X, '武器商店', '#7a4a3a', '#5a3f30', '⚔️');
   drawShopBuilding(VILLAGE_ARMOR_SHOP_X, '防具商店', '#3a5a7a', '#30475a', '🛡️');
   drawShopBuilding(VILLAGE_SHIELD_SHOP_X, '盾牌商店', '#5a4a2a', '#4a3a20', '🔰');
+  drawShopBuilding(VILLAGE_ARMOR_EQUIP_SHOP_X, '盔甲商店', '#4a3a5a', '#382a45', '🥋');
 
   // big tree
   ctx.save();
@@ -3845,6 +4369,7 @@ function drawVillageProps() {
   if (Math.abs(px - VILLAGE_WEAPON_SHOP_X) < 70) drawInteractHint(VILLAGE_WEAPON_SHOP_X, GROUND_Y-180, '按跳躍鍵進入武器商店');
   if (Math.abs(px - VILLAGE_ARMOR_SHOP_X) < 70) drawInteractHint(VILLAGE_ARMOR_SHOP_X, GROUND_Y-180, '按跳躍鍵進入防具商店');
   if (Math.abs(px - VILLAGE_SHIELD_SHOP_X) < 70) drawInteractHint(VILLAGE_SHIELD_SHOP_X, GROUND_Y-180, '按跳躍鍵進入盾牌商店');
+  if (Math.abs(px - VILLAGE_ARMOR_EQUIP_SHOP_X) < 70) drawInteractHint(VILLAGE_ARMOR_EQUIP_SHOP_X, GROUND_Y-180, '按跳躍鍵進入盔甲商店');
   if (Math.abs(px - VILLAGE_TREE_X) < 70) drawInteractHint(VILLAGE_TREE_X, GROUND_Y-200, '按跳躍鍵接取任務');
 }
 
@@ -4083,6 +4608,12 @@ window.addEventListener('keydown', (e) => {
   if ((e.code === 'KeyL' || e.code === 'Escape' || e.code === 'KeyJ' || e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') && overlay) {
     overlay = null;
   }
+  // the bag is a quick weapon/gadget swap usable anywhere, not just in the village -
+  // K opens it from no overlay, and (like every other overlay) closes it again
+  if (e.code === 'KeyK') {
+    if (overlay === 'bag') overlay = null;
+    else if (!overlay && state === 'playing') overlay = 'bag';
+  }
 });
 
 function loop() {
@@ -4094,6 +4625,7 @@ function loop() {
     else if (overlay === 'weaponshop') updateWeaponShopOverlay();
     else if (overlay === 'armorshop') updateArmorShopOverlay();
     else if (overlay === 'shieldshop') updateShieldShopOverlay();
+    else if (overlay === 'armorequip') updateArmorEquipShopOverlay();
     else if (overlay === 'quest') updateQuestOverlay();
     update();
     render();
