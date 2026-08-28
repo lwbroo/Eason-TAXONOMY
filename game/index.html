@@ -1,0 +1,4642 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小龍勇士：第一關</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; background:#0a0a14; overflow:hidden;
+    font-family:'Microsoft JhengHei','PingFang TC','Heiti TC',sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #game-wrap {
+    position:relative; width:100vw; height:100vh;
+    display:flex; align-items:center; justify-content:center;
+  }
+  canvas {
+    background:#000;
+    image-rendering: pixelated;
+    max-width:100vw; max-height:100vh;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+  #touch-controls {
+    position:absolute;
+    display:none;
+    align-items:flex-end;
+    justify-content:space-between;
+    padding:3%; pointer-events:none;
+  }
+  #touch-controls.active { display:flex; }
+  .tc-group { display:flex; gap:10px; pointer-events:auto; }
+  .tc-btn {
+    width:58px; height:58px; border-radius:50%;
+    background:rgba(255,255,255,0.15); border:2px solid rgba(255,255,255,0.35);
+    color:#fff; font-size:20px; display:flex; align-items:center; justify-content:center;
+    user-select:none; -webkit-user-select:none;
+  }
+  .tc-btn:active { background:rgba(255,255,255,0.35); }
+  #tc-attack { width:74px; height:74px; background:rgba(255,80,60,0.3); border-color:rgba(255,80,60,0.6); }
+  #tc-jump { width:74px; height:74px; background:rgba(80,180,255,0.3); border-color:rgba(80,180,255,0.6); }
+  #tc-hp-potion { width:52px; height:52px; background:rgba(255,107,92,0.3); border-color:rgba(255,107,92,0.6); font-size:14px; }
+  #tc-fp-potion { width:52px; height:52px; background:rgba(92,157,255,0.3); border-color:rgba(92,157,255,0.6); font-size:14px; }
+  #tc-shield { width:64px; height:64px; background:rgba(80,220,180,0.3); border-color:rgba(80,220,180,0.65); }
+  #tc-joystick {
+    position:relative; width:112px; height:112px; border-radius:50%;
+    background:rgba(255,255,255,0.10); border:2px solid rgba(255,255,255,0.3);
+    pointer-events:auto; touch-action:none;
+  }
+  #tc-joystick-knob {
+    position:absolute; width:48px; height:48px; border-radius:50%;
+    background:rgba(255,255,255,0.35); border:2px solid rgba(255,255,255,0.55);
+    left:50%; top:50%; transform:translate(-50%,-50%);
+    pointer-events:none;
+  }
+  #hint {
+    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    color:rgba(255,255,255,0.55); font-size:12px; letter-spacing:1px; pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<div id="game-wrap">
+  <canvas id="game" width="960" height="600"></canvas>
+  <div id="hint">←→移動　J攻擊(長按=特技)　K包包　⎵跳躍　L防禦　1/2 藥水　I 專屬裝備</div>
+  <div id="touch-controls">
+    <div id="tc-joystick"><div id="tc-joystick-knob"></div></div>
+    <div class="tc-group">
+      <div class="tc-btn" id="tc-hp-potion">HP瓶</div>
+      <div class="tc-btn" id="tc-fp-potion">MP瓶</div>
+      <div class="tc-btn" id="tc-shield">防禦</div>
+      <div class="tc-btn" id="tc-attack">攻擊</div>
+      <div class="tc-btn" id="tc-jump">跳</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const GRAVITY = 0.62;
+const GROUND_FRICTION = 0.82;
+
+// ---------- Background (hand-drawn to match the dragon's flat cartoon style) ----------
+// Star positions are seeded once and tiled with parallax, rather than the raw
+// photo the level used to show behind the vector-drawn dragon and platforms.
+const STAR_TILE = 900;
+const stars = [];
+for (let i = 0; i < 46; i++) {
+  stars.push({
+    x: Math.random() * STAR_TILE,
+    y: Math.random() * H * 0.6,
+    r: 0.6 + Math.random() * 1.5,
+    phase: Math.random() * Math.PI * 2
+  });
+}
+// Deterministic rolling silhouette (sum of a few sine waves) - no stored points needed.
+function hillHeight(worldX) {
+  return 26 * Math.sin(worldX * 0.006) + 14 * Math.sin(worldX * 0.017 + 1.5) + 8 * Math.sin(worldX * 0.041 + 0.6);
+}
+
+// ---------- Input ----------
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space','ArrowUp','ArrowLeft','ArrowRight','ArrowDown'].includes(e.code)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// touch controls
+function bindTouch(id, code) {
+  const el = document.getElementById(id);
+  const set = v => e => { e.preventDefault(); keys[code] = v; };
+  el.addEventListener('touchstart', set(true), {passive:false});
+  el.addEventListener('touchend', set(false), {passive:false});
+  el.addEventListener('touchcancel', set(false), {passive:false});
+  el.addEventListener('mousedown', set(true));
+  el.addEventListener('mouseup', set(false));
+  el.addEventListener('mouseleave', set(false));
+}
+if ('ontouchstart' in window) {
+  document.getElementById('touch-controls').classList.add('active');
+  document.getElementById('hint').style.display = 'none';
+}
+
+// Keep the touch overlay locked to the canvas's actual rendered box (it letterboxes
+// on tall phone screens), so the buttons sit over the game instead of the empty margins.
+function syncTouchControlsToCanvas() {
+  const tc = document.getElementById('touch-controls');
+  const rect = canvas.getBoundingClientRect();
+  tc.style.left = rect.left + 'px';
+  tc.style.top = rect.top + 'px';
+  tc.style.width = rect.width + 'px';
+  tc.style.height = rect.height + 'px';
+}
+window.addEventListener('resize', syncTouchControlsToCanvas);
+window.addEventListener('orientationchange', syncTouchControlsToCanvas);
+syncTouchControlsToCanvas();
+bindTouch('tc-jump', 'Space');
+bindTouch('tc-attack', 'KeyJ');
+bindTouch('tc-hp-potion', 'Digit1');
+bindTouch('tc-fp-potion', 'Digit2');
+bindTouch('tc-shield', 'KeyL');
+
+// Virtual joystick: drag within the circular base to move the direction keys,
+// same up/down/left/right axes a physical d-pad would drive.
+function setupJoystick() {
+  const base = document.getElementById('tc-joystick');
+  const knob = document.getElementById('tc-joystick-knob');
+  const maxR = 34;
+  const deadzone = 10;
+  let activePointerId = null;
+
+  function setKnob(dx, dy) {
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  }
+  function resetKeys() {
+    keys['ArrowLeft'] = false; keys['ArrowRight'] = false;
+    keys['ArrowUp'] = false; keys['ArrowDown'] = false;
+  }
+  function updateFromPointer(clientX, clientY) {
+    const rect = base.getBoundingClientRect();
+    const cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+    let dx = clientX - cx, dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > maxR) { dx = dx/dist*maxR; dy = dy/dist*maxR; }
+    setKnob(dx, dy);
+    resetKeys();
+    if (dx > deadzone) keys['ArrowRight'] = true;
+    else if (dx < -deadzone) keys['ArrowLeft'] = true;
+    if (dy > deadzone) keys['ArrowDown'] = true;
+    else if (dy < -deadzone) keys['ArrowUp'] = true;
+  }
+  function endDrag(e) {
+    if (e.pointerId !== activePointerId) return;
+    activePointerId = null;
+    setKnob(0, 0);
+    resetKeys();
+  }
+
+  base.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    activePointerId = e.pointerId;
+    base.setPointerCapture(e.pointerId);
+    updateFromPointer(e.clientX, e.clientY);
+  });
+  base.addEventListener('pointermove', e => {
+    if (e.pointerId !== activePointerId) return;
+    updateFromPointer(e.clientX, e.clientY);
+  });
+  base.addEventListener('pointerup', endDrag);
+  base.addEventListener('pointercancel', endDrag);
+}
+setupJoystick();
+
+function pressedOnce(code, state) {
+  const now = !!keys[code];
+  const was = state.prev;
+  state.prev = now;
+  return now && !was;
+}
+
+// ---------- Weapons ----------
+const WEAPONS = {
+  sword: {
+    name: '直劍', key:'sword',
+    dmg: 16, cooldown: 26, staminaCost: 10, range: 46, windup: 5, color:'#c9d6e3',
+    desc: '攻擊快，傷害中等', speedRating: 2, dmgRating: 2,
+    specialName: '回旋斬', specialCost: 28, specialCooldown: 100
+  },
+  hammer: {
+    name: '大錘', key:'hammer',
+    dmg: 30, cooldown: 52, staminaCost: 22, range: 50, windup: 14, color:'#9b7653',
+    desc: '攻擊慢，傷害最高', speedRating: 1, dmgRating: 3,
+    specialName: '投擲重錘', specialCost: 36, specialCooldown: 150
+  },
+  spear: {
+    name: '長矛', key:'spear',
+    dmg: 9, cooldown: 16, staminaCost: 7, range: 62, windup: 3, color:'#c2a15a',
+    desc: '攻擊最快，傷害最低', speedRating: 3, dmgRating: 1,
+    specialName: '五連刺', specialCost: 22, specialCooldown: 100
+  },
+  dualdagger: {
+    name: '雙刀', key:'dualdagger', price: 40,
+    dmg: 7, cooldown: 12, staminaCost: 6, range: 40, windup: 2, color:'#d94f6a',
+    desc: '攻擊極快，近距離', speedRating: 3, dmgRating: 1,
+    specialName: '疾風突進', specialCost: 24, specialCooldown: 110
+  },
+  greataxe: {
+    name: '巨斧', key:'greataxe', price: 45,
+    dmg: 38, cooldown: 64, staminaCost: 26, range: 54, windup: 18, color:'#5a6b7a',
+    desc: '攻擊最慢，傷害最高', speedRating: 1, dmgRating: 3,
+    specialName: '沖天擲', specialCost: 40, specialCooldown: 160
+  },
+  whip: {
+    name: '鞭', key:'whip', price: 35,
+    dmg: 6, cooldown: 10, staminaCost: 5, range: 85, windup: 2, color:'#8a4fd9',
+    desc: '攻擊超快，觸及最遠', speedRating: 3, dmgRating: 1,
+    specialName: '千裂鞭牙', specialCost: 20, specialCooldown: 90
+  },
+  greatsword: {
+    name: '巨劍', key:'greatsword', price: 55,
+    dmg: 34, cooldown: 58, staminaCost: 24, range: 70, windup: 16, color:'#c9a24a',
+    desc: '攻擊慢，傷害極高，範圍大', speedRating: 1, dmgRating: 3,
+    specialName: '十字斬', specialCost: 34, specialCooldown: 150
+  },
+  trident: {
+    name: '三叉戟', key:'trident', price: 38,
+    dmg: 14, cooldown: 30, staminaCost: 12, range: 58, windup: 8, color:'#4fb8c9',
+    desc: '攻擊中等，觸及範圍廣', speedRating: 2, dmgRating: 2,
+    specialName: '海嘯突刺', specialCost: 26, specialCooldown: 110
+  },
+  katana: {
+    name: '武士刀', key:'katana', price: 48,
+    dmg: 22, cooldown: 22, staminaCost: 14, range: 50, windup: 4, color:'#e8e8ee',
+    desc: '攻擊快，傷害高', speedRating: 3, dmgRating: 2,
+    specialName: '居合斬', specialCost: 30, specialCooldown: 130
+  },
+  shortblade: {
+    name: '短刀', key:'shortblade', price: 20,
+    dmg: 5, cooldown: 8, staminaCost: 4, range: 30, windup: 1, color:'#a9a9a9',
+    desc: '攻擊最快，近距離，便宜', speedRating: 3, dmgRating: 1,
+    specialName: '背刺連擊', specialCost: 16, specialCooldown: 80
+  },
+  bow: {
+    name: '弓', key:'bow', price: 42,
+    dmg: 10, cooldown: 24, staminaCost: 8, range: 0, windup: 6, color:'#8a6a3a',
+    desc: '朝滑鼠/觸點方向遠程射擊', speedRating: 2, dmgRating: 1,
+    specialName: '狙擊', specialCost: 26, specialCooldown: 130, ranged: true
+  },
+  flail: {
+    name: '連枷', key:'flail', price: 40,
+    dmg: 18, cooldown: 34, staminaCost: 16, range: 64, windup: 10, color:'#6a5a4a',
+    desc: '攻擊中等，範圍不錯', speedRating: 2, dmgRating: 2,
+    specialName: '旋風連擊', specialCost: 28, specialCooldown: 120
+  },
+  scythe: {
+    name: '鐮刀', key:'scythe', price: 50,
+    dmg: 20, cooldown: 36, staminaCost: 18, range: 66, windup: 9, color:'#8a1a2a',
+    desc: '攻擊中等，範圍廣', speedRating: 2, dmgRating: 2,
+    specialName: '死神橫掃', specialCost: 30, specialCooldown: 130
+  }
+};
+const ATTACK_HOLD_THRESHOLD = 18; // frames held before a long-press fires the special instead of a tap
+
+// ---------- Game state ----------
+let state = 'menu'; // menu -> playing -> lose
+let overlay = null;  // null | 'weaponshop' | 'armorshop' | 'shieldshop' | 'armorequip' | 'quest' | 'bag' - modal UI shown over the current scene
+
+// ---------- Shields ----------
+const SHIELDS = {
+  none: {
+    name: '無盾牌', key:'none',
+    desc: '基本格擋，減傷 80%，移動不受影響', blockReduction: 0.2, locksMovement: false, thorns: false
+  },
+  greatshield: {
+    name: '大盾', key:'greatshield', price: 50,
+    desc: '格擋減傷 95%，但格擋時無法移動', blockReduction: 0.05, locksMovement: true, thorns: false
+  },
+  spikeshield: {
+    name: '尖刺盾', key:'spikeshield', price: 45,
+    desc: '格擋減傷 80%，格擋中被擊會反傷附近敵人', blockReduction: 0.2, locksMovement: false, thorns: true
+  },
+  buckler: {
+    name: '輕盾', key:'buckler', price: 30,
+    desc: '格擋減傷較低 (60%)，但格擋時仍可全速移動', blockReduction: 0.4, locksMovement: false, thorns: false, fastBlock: true
+  },
+  manashield: {
+    name: '魔法盾', key:'manashield', price: 55,
+    desc: '格擋減傷 80%，消耗的是 FP 而非耐力', blockReduction: 0.2, locksMovement: false, thorns: false, manaCost: true
+  }
+};
+const PURCHASABLE_SHIELD_KEYS = ['none', 'greatshield', 'spikeshield', 'buckler', 'manashield'];
+
+// ---------- Armor (passive, always-on damage reduction - stacks with shield blocking) ----------
+const ARMORS = {
+  none: {
+    name: '無盔甲', key:'none',
+    desc: '沒有額外防禦加成', defenseReduction: 0, thorns: false
+  },
+  leather: {
+    name: '皮鎧甲', key:'leather', price: 25,
+    desc: '輕便的皮革護甲，降低所有傷害 12%', defenseReduction: 0.12, thorns: false
+  },
+  spike: {
+    name: '尖刺鎧甲', key:'spike', price: 50,
+    desc: '降低傷害 18%，被近戰擊中時會自動反傷附近敵人', defenseReduction: 0.18, thorns: true
+  },
+  chain: {
+    name: '鎖鏈鎧甲', key:'chain', price: 85,
+    desc: '紮實的鎖鏈甲，降低所有傷害 30%', defenseReduction: 0.3, thorns: false
+  },
+  diamond: {
+    name: '鑽石鎧甲', key:'diamond', price: 140,
+    desc: '最頂級的鎧甲，降低所有傷害 45%', defenseReduction: 0.45, thorns: false
+  }
+};
+const PURCHASABLE_ARMOR_KEYS = ['none', 'leather', 'spike', 'chain', 'diamond'];
+
+// ---------- Gadgets (rare monster drops - a second, independent attack/ability slot) ----------
+// Each maps back to the grunt kind that drops it, so damageEnemy() knows what to roll for.
+const GADGETS = {
+  fireball: { name:'火球', key:'fireball', dropKind:'lava',
+    desc:'像熔岩怪一樣往前投擲火球', dmg:16, cooldown:38, staminaCost:14, speed:7, color:'#ff8a3a' },
+  staff: { name:'法師權杖', key:'staff', dropKind:'mage',
+    desc:'發射會自動追蹤敵人的魔法彈', dmg:13, cooldown:55, staminaCost:16, speed:6, homing:true, color:'#ff7a3a' },
+  bubble: { name:'火焰泡', key:'bubble', dropKind:'owl',
+    desc:'連續發射的小火焰泡，傷害低但可連發', dmg:6, cooldown:12, staminaCost:6, speed:8, color:'#ffb37a' },
+  bomb: { name:'炸彈', key:'bomb', dropKind:'bomb',
+    desc:'拋出會落地爆炸的炸彈，範圍傷害很高', dmg:24, cooldown:75, staminaCost:22, speed:6.5, arc:true, explodeRadius:85, color:'#c9c9d2' },
+  wings: { name:'燕子之翼', key:'wings', dropKind:'bird',
+    desc:'長按跳躍鍵可以在天空飛行 5 秒', passive:true, flightTime:300, color:'#dbe9ff' }
+};
+const GADGET_DROP_CHANCE = 0.22;
+const GADGET_KIND_TO_KEY = { lava:'fireball', mage:'staff', owl:'bubble', bomb:'bomb', bird:'wings' };
+
+let selectedWeapon = 'sword';
+let levelTimeLeft = 130 * 60; // frames (~130s at 60fps)
+let frame = 0;
+
+const camera = { x: 0 };
+const GROUND_Y = 520;
+let LEVEL_WIDTH = 3000;
+let currentLevelId = 'redmoon';
+
+// Platforms laid out to mirror the drawing: stepped blocks with gaps, a floating
+// platform mid-level (validated jumpable with the current jump power), ending on a
+// wide final platform where the portal to the village stands. Every adventure level
+// (village excepted) reuses this exact shape - only the enemies and colors change -
+// so the jump timing stays whatever was already validated for the first level.
+const ADVENTURE_PLATFORMS = [
+  {x:0,    y:GROUND_Y, w:300, h:80},
+  {x:380,  y:GROUND_Y, w:170, h:80},
+  {x:640,  y:GROUND_Y, w:210, h:80},
+  {x:940,  y:GROUND_Y-40, w:150, h:120},
+  {x:1180, y:GROUND_Y-90, w:220, h:170, floating:true},
+  {x:1500, y:GROUND_Y, w:230, h:80},
+  {x:1830, y:GROUND_Y, w:260, h:80},
+  {x:2190, y:GROUND_Y, w:810, h:80}
+];
+// The village is one flat, safe walkway - no gaps, no enemies.
+const VILLAGE_WIDTH = 2400;
+const VILLAGE_PLATFORMS = [
+  {x:0, y:GROUND_Y, w:VILLAGE_WIDTH, h:80}
+];
+const VILLAGE_WEAPON_SHOP_X = 480;
+const VILLAGE_ARMOR_SHOP_X = 900;
+const VILLAGE_SHIELD_SHOP_X = 1320;
+const VILLAGE_ARMOR_EQUIP_SHOP_X = 1740;
+const VILLAGE_TREE_X = 2100;
+
+// The arena is one flat platform, like the village, but with waves of enemies and a
+// portal at the far end so it's an optional side challenge, not a story level.
+const ARENA_WIDTH = 1500;
+const ARENA_PLATFORMS = [
+  {x:0, y:GROUND_Y, w:ARENA_WIDTH, h:80}
+];
+
+let platforms = ADVENTURE_PLATFORMS;
+
+function groundHeightAt(x) {
+  for (const p of platforms) {
+    if (x >= p.x && x <= p.x + p.w) return p.y;
+  }
+  return H + 100;
+}
+
+// ---------- Player (small dragon) ----------
+const player = {
+  x: 60, y: GROUND_Y - 60, w: 40, h: 56,
+  vx: 0, vy: 0,
+  facing: 1,
+  onGround: false,
+  hp: 100, maxHp: 100,
+  fp: 100, maxFp: 100,
+  sta: 100, maxSta: 100,
+  attackCooldown: 0,
+  attackWindup: 0,
+  attacking: false,
+  hitThisSwing: false,
+  invuln: 0,
+  weapon: WEAPONS.sword,
+  shield: SHIELDS.none,
+  unlockedShields: new Set(['none']),
+  armor: ARMORS.none,
+  unlockedArmors: new Set(['none']),
+  blocking: false,
+  blockFlash: 0,
+  dead: false,
+  walkCycle: 0,
+  // long-press attack -> weapon special
+  attackHold: { holding:false, startFrame:0, specialFired:false },
+  specialCooldown: 0,
+  specialType: null,   // 'sword' | 'hammer' | 'spear' while a special is resolving
+  specialTimer: 0,
+  specialPhase: 0,
+  hammerThrow: null,   // {x,y,vx,vy,returning,hitSet} while the hammer is away from hand
+  dashSpecial: null,   // {hitSet} while the dual-dagger gale dash is resolving
+  skyAxe: null,        // {x,y} launch point while the greataxe is thrown skyward
+  rootedTimer: 0,      // can't move while this is > 0 - the jungle boss's vine bind
+  // gadgets: rare monster drops usable independently of the equipped weapon
+  unlockedGadgets: new Set(),
+  equippedGadget: null,
+  gadgetCooldown: 0,
+  flightTimer: 0,       // frames of wings-gadget flight used since the last landing
+  flightUsed: false,
+  // which story bosses have been beaten this run - gates each level's portal home
+  bossDefeated: { volcano:false, ocean:false, sky:false, jungle:false },
+  // potions (do not regenerate - only refilled by picking up more, or a fresh run)
+  hpPotions: 3, maxHpPotions: 3,
+  fpPotions: 3, maxFpPotions: 3,
+  potionCooldown: 0,
+  // village shop
+  gold: 0,
+  weaponDmgBonus: 0,
+  shopLevels: { weapon:0, armor:0, mana:0, hpflask:0, fpflask:0 },
+  unlockedWeapons: new Set(['sword', 'hammer', 'spear'])
+};
+
+function currentWeaponDmg() {
+  return player.weapon.dmg + player.weaponDmgBonus;
+}
+
+// ---------- Village shop ----------
+const SHOP_ITEMS = [
+  { id:'weapon',  name:'武器強化', desc:'+4 攻擊力',            baseCost:20, costStep:10, maxLevel:5 },
+  { id:'armor',   name:'血量強化', desc:'+20 上限HP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
+  { id:'mana',    name:'魔力強化', desc:'+20 上限MP，並回滿',     baseCost:20, costStep:10, maxLevel:5 },
+  { id:'hpflask', name:'HP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 },
+  { id:'fpflask', name:'MP藥水袋', desc:'+1 瓶上限，立即補滿一瓶', baseCost:15, costStep:8,  maxLevel:5 }
+];
+// Same purchase system, split across the two physical shop buildings in the village.
+const WEAPON_SHOP_UPGRADE_ITEMS = SHOP_ITEMS.filter(i => i.id === 'weapon');
+const ARMOR_SHOP_ITEMS = SHOP_ITEMS.filter(i => i.id !== 'weapon');
+const PURCHASABLE_WEAPON_KEYS = ['sword', 'hammer', 'spear', 'dualdagger', 'greataxe', 'whip', 'greatsword', 'trident', 'katana', 'shortblade', 'bow', 'flail', 'scythe'];
+function selectOrBuyWeapon(key) {
+  const w = WEAPONS[key];
+  if (!w) return;
+  if (player.unlockedWeapons.has(key)) {
+    player.weapon = w;
+  } else if (w.price && player.gold >= w.price) {
+    player.gold -= w.price;
+    player.unlockedWeapons.add(key);
+    player.weapon = w;
+  }
+}
+function selectOrBuyShield(key) {
+  const s = SHIELDS[key];
+  if (!s) return;
+  if (player.unlockedShields.has(key)) {
+    player.shield = s;
+  } else if (s.price && player.gold >= s.price) {
+    player.gold -= s.price;
+    player.unlockedShields.add(key);
+    player.shield = s;
+  }
+}
+function selectOrBuyArmor(key) {
+  const a = ARMORS[key];
+  if (!a) return;
+  if (player.unlockedArmors.has(key)) {
+    player.armor = a;
+  } else if (a.price && player.gold >= a.price) {
+    player.gold -= a.price;
+    player.unlockedArmors.add(key);
+    player.armor = a;
+  }
+}
+function shopItemCost(item) {
+  return item.baseCost + item.costStep * player.shopLevels[item.id];
+}
+function buyShopItem(id) {
+  const item = SHOP_ITEMS.find(s => s.id === id);
+  if (!item) return;
+  const level = player.shopLevels[id];
+  if (level >= item.maxLevel) return;
+  const cost = shopItemCost(item);
+  if (player.gold < cost) return;
+  player.gold -= cost;
+  player.shopLevels[id]++;
+  if (id === 'weapon') player.weaponDmgBonus += 4;
+  else if (id === 'armor') { player.maxHp += 20; player.hp = Math.min(player.maxHp, player.hp + 20); }
+  else if (id === 'mana') { player.maxFp += 20; player.fp = Math.min(player.maxFp, player.fp + 20); }
+  else if (id === 'hpflask') { player.maxHpPotions++; player.hpPotions = Math.min(player.maxHpPotions, player.hpPotions + 1); }
+  else if (id === 'fpflask') { player.maxFpPotions++; player.fpPotions = Math.min(player.maxFpPotions, player.fpPotions + 1); }
+}
+
+// ---------- Enemies ----------
+// Every themed level's monsters are one of two shared behavior archetypes, just
+// reskinned and re-statted: "ground" patrols its spawn platform and telegraphs an
+// attack (melee bump or a thrown projectile); "flyer" hovers and either dives into
+// melee or casts a projectile from range. Bosses are a bigger, tougher instance of
+// either archetype that also fires an extra AoE burst attack periodically.
+let enemies = [];
+function spawnEnemiesForLevel(id) {
+  const def = LEVEL_DEFS[id];
+  enemies = def.makeEnemies ? def.makeEnemies() : [];
+}
+
+function makeGroundEnemy(x, groundY, cfg) {
+  const w = cfg.w || 38, h = cfg.h || 40;
+  // Patrol range is clamped to the platform it spawns on, so it turns around at the
+  // edge instead of walking straight out over a gap.
+  const home = platforms.find(p => x >= p.x && x <= p.x + p.w) || {x:0, w:LEVEL_WIDTH};
+  return {
+    type:'bomb', kind: cfg.kind, name: cfg.name || '', isBoss: !!cfg.isBoss,
+    x, y:groundY-h, w, h, vx:0, vy:0,
+    hp:cfg.hp, maxHp:cfg.hp, dmg:cfg.dmg, speed:cfg.speed, dir:-1,
+    homeMinX: home.x, homeMaxX: home.x + home.w - w,
+    onGround:true, hitFlash:0, exploding:false, explodeTimer:0,
+    attackCooldown:0, telegraph:false, attackWindup:0, dead:false, groundY,
+    attackMode: cfg.attackMode || 'ranged',
+    projectileKind: cfg.projectileKind || 'bomb',
+    colorMain: cfg.colorMain || '#3a3a44', colorAccent: cfg.colorAccent || '#e8e8ee',
+    bossBurstCooldown: 0,
+    buried: !!cfg.buried, emerging: false, emergeTimer: 0, emergeDuration: 0,
+    signature: cfg.signature || null
+  };
+}
+
+function makeFlyingEnemy(x, y, cfg) {
+  const w = cfg.w || 34, h = cfg.h || 26;
+  return {
+    type:'drone', kind: cfg.kind, name: cfg.name || '', isBoss: !!cfg.isBoss,
+    x, y, baseY:y, w, h, vx:0, vy:0,
+    hp:cfg.hp, maxHp:cfg.hp, dmg:cfg.dmg, speed:cfg.speed, dir:-1,
+    hitFlash:0, attackCooldown:0, dead:false, phase:Math.random()*Math.PI*2,
+    dashTimer:0, dashing:false, dashDir:0, charging:false, chargeTimer:0,
+    attackMode: cfg.attackMode || 'dash',
+    projectileKind: cfg.projectileKind || 'bomb',
+    colorMain: cfg.colorMain || '#555c66', colorAccent: cfg.colorAccent || '#e8453f',
+    bossBurstCooldown: 0,
+    signature: cfg.signature || null, galeDashesLeft: 0, galeFollowup: false
+  };
+}
+
+// ---------- Level roster ----------
+// Every adventure level reuses ADVENTURE_PLATFORMS (validated jump geometry) and
+// just swaps its enemy roster, background palette, and "focal" backdrop object.
+const LEVEL_DEFS = {
+  redmoon: {
+    name: '紅月遺跡', isVillage: false,
+    theme: { sky1:'#2c2050', sky2:'#553a72', sky3:'#caa2c4', hill:'#3c2b57', focal:'moon' },
+    makeEnemies: () => [
+      makeGroundEnemy(700, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
+      makeGroundEnemy(1620, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
+      makeFlyingEnemy(1950, GROUND_Y-130, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' }),
+      makeGroundEnemy(2260, GROUND_Y, { kind:'bomb', hp:80, dmg:12, speed:0.55, attackMode:'ranged', projectileKind:'bomb', colorMain:'#3a3a44', colorAccent:'#e8e8ee' }),
+      makeFlyingEnemy(2500, GROUND_Y-110, { kind:'classic', hp:24, dmg:14, speed:1.6, attackMode:'dash', colorMain:'#555c66', colorAccent:'#e8453f' })
+    ]
+  },
+  volcano: {
+    name: '火山關卡', isVillage: false, requiresBoss: true,
+    grunts: ['熔岩怪', '火焰法師'], bossName: '熔岩土龍',
+    theme: { sky1:'#3a1408', sky2:'#7a2c10', sky3:'#e8813a', hill:'#4a1c0c', focal:'volcano' },
+    makeEnemies: () => [
+      makeGroundEnemy(700, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+      makeGroundEnemy(1620, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
+      makeFlyingEnemy(1950, GROUND_Y-130, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a', signature:'lava' })
+    ]
+  },
+  ocean: {
+    name: '海底關卡', isVillage: false, requiresBoss: true,
+    grunts: ['寄居蟹怪', '大章魚'], bossName: '深海龍王',
+    theme: { sky1:'#0a2440', sky2:'#0f4d6b', sky3:'#7fc9d6', hill:'#0d3550', focal:'bubble' },
+    makeEnemies: () => [
+      makeGroundEnemy(700, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+      makeGroundEnemy(1620, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
+      makeFlyingEnemy(1950, GROUND_Y-130, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+      makeFlyingEnemy(2750, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff', signature:'ink' })
+    ]
+  },
+  sky: {
+    name: '天空關卡', isVillage: false, requiresBoss: true,
+    grunts: ['極速燕子', '貓頭鷹伯爵'], bossName: '飛龍亞基爾',
+    theme: { sky1:'#1a3a6e', sky2:'#4c78c0', sky3:'#dcefff', hill:'#2e4f86', focal:'cloud' },
+    makeEnemies: () => [
+      makeFlyingEnemy(700, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
+      makeFlyingEnemy(1050, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+      makeFlyingEnemy(1620, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
+      makeFlyingEnemy(1950, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+      makeFlyingEnemy(2750, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff', signature:'gale' })
+    ]
+  },
+  jungle: {
+    name: '叢林關卡', isVillage: false, requiresBoss: true,
+    grunts: ['藤蔓怪', '潛伏藤蔓'], bossName: '草神狼',
+    theme: { sky1:'#0f2e14', sky2:'#1f5c2a', sky3:'#a8d98a', hill:'#173d1e', focal:'canopy' },
+    makeEnemies: () => [
+      makeGroundEnemy(680, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
+      makeGroundEnemy(780, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true }),
+      makeGroundEnemy(1550, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
+      makeGroundEnemy(1650, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true }),
+      makeGroundEnemy(2750, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0', signature:'vine' })
+    ]
+  },
+  village: {
+    name: '村莊', isVillage: true,
+    theme: { sky1:'#2c2050', sky2:'#553a72', sky3:'#caa2c4', hill:'#3c2b57', focal:'moon' },
+    makeEnemies: () => []
+  },
+  arena: {
+    name: '無限死鬥', isVillage: false, isArena: true,
+    platforms: ARENA_PLATFORMS, width: ARENA_WIDTH,
+    grunts: ['四大關卡小怪混戰'], bossName: '每 5 波隨機一位四大魔王',
+    theme: { sky1:'#2a0f14', sky2:'#5c1f26', sky3:'#d97a5a', hill:'#3a1218', focal:'volcano' },
+    makeEnemies: () => []
+  }
+};
+const QUEST_LEVEL_IDS = ['volcano', 'ocean', 'sky', 'jungle'];
+
+// ---------- Arena (endless side mode) ----------
+// Every grunt from the four story levels, available as a spawner that just needs an
+// x position - reused here instead of duplicating each enemy's stat block again.
+const ARENA_GRUNT_FACTORIES = [
+  (x) => makeGroundEnemy(x, GROUND_Y, { kind:'lava', name:'熔岩怪', hp:90, dmg:12, speed:0.5, attackMode:'ranged', projectileKind:'lava', colorMain:'#8a3a1e', colorAccent:'#ffcf4a' }),
+  (x) => makeFlyingEnemy(x, GROUND_Y-150, { kind:'mage', name:'火焰法師', hp:26, dmg:15, speed:1.3, attackMode:'cast', projectileKind:'fireball', colorMain:'#6a2a5a', colorAccent:'#ff7a3a' }),
+  (x) => makeGroundEnemy(x, GROUND_Y, { kind:'shell', name:'寄居蟹怪', hp:95, dmg:10, speed:0.5, attackMode:'melee', colorMain:'#c1502f', colorAccent:'#ffdca0' }),
+  (x) => makeFlyingEnemy(x, GROUND_Y-150, { kind:'tentacle', name:'大章魚', hp:24, dmg:14, speed:1.2, attackMode:'cast', projectileKind:'ink', colorMain:'#7a3f9e', colorAccent:'#e0a2ff' }),
+  (x) => makeFlyingEnemy(x, GROUND_Y-200, { kind:'bird', name:'極速燕子', hp:20, dmg:15, speed:3.4, attackMode:'dash', colorMain:'#3a6fd8', colorAccent:'#dbe9ff' }),
+  (x) => makeFlyingEnemy(x, GROUND_Y-150, { kind:'owl', name:'貓頭鷹伯爵', hp:28, dmg:13, speed:1.4, attackMode:'cast', projectileKind:'feather', colorMain:'#7a5a3a', colorAccent:'#e8d2a0' }),
+  (x) => makeGroundEnemy(x, GROUND_Y, { kind:'vine', name:'藤蔓怪', hp:90, dmg:11, speed:0.5, attackMode:'melee', colorMain:'#3d7a2a', colorAccent:'#dff5b0' }),
+  (x) => makeGroundEnemy(x, GROUND_Y, { kind:'lurkvine', name:'潛伏藤蔓', hp:60, dmg:13, speed:0.4, attackMode:'ranged', projectileKind:'thorn', colorMain:'#2a5c1e', colorAccent:'#c8f08a', buried:true })
+];
+const ARENA_BOSS_X = ARENA_WIDTH / 2;
+const ARENA_BOSS_FACTORIES = [
+  () => makeGroundEnemy(ARENA_BOSS_X, GROUND_Y, { kind:'wolf', name:'熔岩土龍', isBoss:true, w:96, h:100, hp:260, dmg:18, speed:0.45, attackMode:'ranged', projectileKind:'lava', colorMain:'#b8451f', colorAccent:'#ffdb6a', signature:'lava' }),
+  () => makeFlyingEnemy(ARENA_BOSS_X, GROUND_Y-160, { kind:'dragon', name:'深海龍王', isBoss:true, w:86, h:70, hp:240, dmg:17, speed:1.3, attackMode:'cast', projectileKind:'ink', colorMain:'#264a8a', colorAccent:'#8fd0ff', signature:'ink' }),
+  () => makeFlyingEnemy(ARENA_BOSS_X, GROUND_Y-220, { kind:'dragon', name:'飛龍亞基爾', isBoss:true, w:88, h:72, hp:250, dmg:18, speed:1.8, attackMode:'dash', colorMain:'#5a3ab0', colorAccent:'#c9a2ff', signature:'gale' }),
+  () => makeGroundEnemy(ARENA_BOSS_X, GROUND_Y, { kind:'wolf', name:'草神狼', isBoss:true, w:94, h:76, hp:255, dmg:17, speed:0.9, attackMode:'melee', colorMain:'#4a7a2a', colorAccent:'#e8f5a0', signature:'vine' })
+];
+
+let arenaWave = 0;
+let arenaWaveDelay = 40;   // frames until the next wave spawns, once the current one is cleared
+let arenaBanner = '';      // brief "第 N 波" / "首領來襲！" text shown when a wave spawns
+let arenaBannerTimer = 0;
+
+// Frames remaining to show the "all four bosses defeated" congratulations banner -
+// set once, the moment the last of the four story bosses falls.
+let worldCompleteBanner = 0;
+
+// Later waves aren't just bigger - each monster is individually tougher too, so the
+// arena keeps getting harder even once the enemy count caps out at 10.
+function applyArenaScaling(en) {
+  const scale = 1 + (arenaWave - 1) * 0.08;
+  en.hp = Math.round(en.hp * scale);
+  en.maxHp = en.hp;
+  en.dmg = Math.round(en.dmg * scale);
+}
+
+function spawnArenaWave() {
+  arenaWave++;
+  const isBossWave = arenaWave % 5 === 0;
+  if (isBossWave) {
+    const boss = ARENA_BOSS_FACTORIES[Math.floor(Math.random() * ARENA_BOSS_FACTORIES.length)]();
+    applyArenaScaling(boss);
+    enemies = [boss];
+    arenaBanner = `第 ${arenaWave} 波：首領來襲－${boss.name}！`;
+  } else {
+    const count = Math.min(10, 2 + arenaWave);
+    const spawned = [];
+    for (let i = 0; i < count; i++) {
+      const factory = ARENA_GRUNT_FACTORIES[Math.floor(Math.random() * ARENA_GRUNT_FACTORIES.length)];
+      const x = 150 + Math.random() * (ARENA_WIDTH - 500);
+      const en = factory(x);
+      applyArenaScaling(en);
+      spawned.push(en);
+    }
+    enemies = spawned;
+    arenaBanner = `第 ${arenaWave} 波`;
+  }
+  arenaBannerTimer = 150;
+}
+
+function updateArena() {
+  if (currentLevelId !== 'arena') return;
+  if (arenaBannerTimer > 0) arenaBannerTimer--;
+  const cleared = enemies.length === 0 || enemies.every(en => en.dead && !en.exploding);
+  if (cleared) {
+    if (arenaWaveDelay > 0) arenaWaveDelay--;
+    else { spawnArenaWave(); arenaWaveDelay = 100; }
+  }
+}
+
+// ---------- Coins ----------
+const COIN_VALUE = 5;
+let coins = [];
+function spawnCoins() {
+  coins = [];
+  for (const p of platforms) {
+    const n = Math.max(2, Math.floor(p.w / 140));
+    for (let i = 0; i < n; i++) {
+      coins.push({
+        x: p.x + (p.w / (n + 1)) * (i + 1),
+        y: p.y - 34,
+        r: 9, collected: false, phase: Math.random() * Math.PI * 2
+      });
+    }
+  }
+}
+function updateCoins() {
+  const hb = {x: player.x, y: player.y, w: player.w, h: player.h};
+  for (const c of coins) {
+    if (c.collected) continue;
+    if (rectsOverlap(hb, {x:c.x-c.r, y:c.y-c.r, w:c.r*2, h:c.r*2})) {
+      c.collected = true;
+      player.gold += COIN_VALUE;
+      spawnSparkleAt(c.x, c.y, '#ffd35c');
+    }
+  }
+}
+function drawCoins() {
+  for (const c of coins) {
+    if (c.collected) continue;
+    const bob = Math.sin(frame * 0.08 + c.phase) * 3;
+    ctx.save();
+    ctx.translate(c.x - camera.x, c.y + bob);
+    ctx.fillStyle = '#f5c542';
+    ctx.beginPath(); ctx.arc(0, 0, c.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#c98a1f';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, c.r, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#fff3c9';
+    ctx.beginPath(); ctx.arc(-2.5, -2.5, c.r*0.35, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ---------- Gadget drops (grunts have a chance to drop their signature item) ----------
+let gadgetDrops = [];
+let gadgetPickupBanner = null; // {text, timer} - a brief "獲得專屬裝備" toast
+function spawnGadgetDrop(x, y, gadgetKey) {
+  gadgetDrops.push({ x, y, w:20, h:20, vy:-3, gadgetKey, collected:false, phase:Math.random()*Math.PI*2 });
+}
+function updateGadgetDrops() {
+  const hb = {x: player.x, y: player.y, w: player.w, h: player.h};
+  for (const d of gadgetDrops) {
+    if (d.collected) continue;
+    d.vy = Math.min(6, d.vy + 0.4);
+    d.y += d.vy;
+    const floor = groundHeightAt(d.x) - d.h/2;
+    if (d.y > floor) { d.y = floor; d.vy = 0; }
+    if (rectsOverlap(hb, {x:d.x-d.w/2, y:d.y-d.h/2, w:d.w, h:d.h})) {
+      d.collected = true;
+      const g = GADGETS[d.gadgetKey];
+      if (!player.unlockedGadgets.has(d.gadgetKey)) {
+        player.unlockedGadgets.add(d.gadgetKey);
+        if (!player.equippedGadget) player.equippedGadget = d.gadgetKey;
+        spawnSparkleAt(d.x, d.y, g.color);
+        gadgetPickupBanner = { text: `獲得專屬裝備：${g.name}！`, timer: 150 };
+      } else {
+        player.gold += 10;
+        spawnSparkleAt(d.x, d.y, '#f5c542');
+      }
+    }
+  }
+  gadgetDrops = gadgetDrops.filter(d => !d.collected);
+  if (gadgetPickupBanner) {
+    gadgetPickupBanner.timer--;
+    if (gadgetPickupBanner.timer <= 0) gadgetPickupBanner = null;
+  }
+}
+function drawGadgetDrops() {
+  for (const d of gadgetDrops) {
+    if (d.collected) continue;
+    const g = GADGETS[d.gadgetKey];
+    const bob = Math.sin(frame * 0.1 + d.phase) * 3;
+    ctx.save();
+    ctx.translate(d.x - camera.x, d.y + bob);
+    const pulse = 0.6 + 0.4 * Math.sin(frame * 0.15 + d.phase);
+    ctx.globalAlpha = 0.35 * pulse;
+    ctx.fillStyle = g.color;
+    ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g.color;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -10); ctx.lineTo(10, 0); ctx.lineTo(0, 10); ctx.lineTo(-10, 0);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+}
+function drawGadgetPickupBanner() {
+  if (!gadgetPickupBanner) return;
+  const alpha = Math.min(1, gadgetPickupBanner.timer / 30);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffe08a';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText(gadgetPickupBanner.text, W/2, 118);
+  ctx.textAlign = 'left';
+  ctx.restore();
+}
+
+// ---------- Particles (hits, explosions, pickups) ----------
+let particles = [];
+function addParticle(p) { particles.push(p); }
+
+// ---------- Projectiles (thrown or cast by enemies) ----------
+let projectiles = [];
+function spawnProjectile(x, y, vx, vy, dmg, kind) {
+  projectiles.push({ x, y, vx, vy, r: 6, life: 150, dmg, kind: kind || 'bomb' });
+}
+function throwBomb(en) {
+  spawnProjectile(en.x + en.w/2, en.y + en.h/2 - 12, en.dir * 4.6, -8.6, en.dmg, en.projectileKind);
+}
+function spawnCastProjectile(en, dirX, dirY) {
+  const speed = 5.5;
+  spawnProjectile(en.x + en.w/2, en.y + en.h/2, dirX*speed, dirY*speed, en.dmg, en.projectileKind);
+}
+const PROJECTILE_PALETTE = {
+  lava:     { c1:'#ffd35c', c2:'#ff5a3c' },
+  fireball: { c1:'#ffe08a', c2:'#ff3b1a' },
+  ink:      { c1:'#c9a2ff', c2:'#3a1f5c' },
+  thorn:    { c1:'#c8f08a', c2:'#3d7a2a' },
+  feather:  { c1:'#fff3d6', c2:'#a9793f' },
+  wind:     { c1:'#e8f6ff', c2:'#7fb8dd' }
+};
+function updateProjectiles() {
+  for (const b of projectiles) {
+    if (b.kind === 'bomb' || b.kind === 'lava') b.vy += GRAVITY * 0.65; // lobbed arc, others fly straight
+    b.x += b.vx;
+    b.y += b.vy;
+    b.life--;
+    let landed = false;
+    for (const p of platforms) {
+      if (b.x > p.x && b.x < p.x + p.w && b.y + b.r >= p.y && b.vy >= 0) { landed = true; break; }
+    }
+    const hitPlayer = rectsOverlap({x:b.x-b.r, y:b.y-b.r, w:b.r*2, h:b.r*2}, player);
+    if (landed || hitPlayer || b.life <= 0 || b.y > H + 300) {
+      explodeAt(b.x, b.y, 70, b.dmg);
+      b.dead = true;
+    }
+  }
+  projectiles = projectiles.filter(b => !b.dead);
+}
+// ---------- Aiming (the bow fires wherever the player is pointing, not just forward) ----------
+// Tracked in world space so it stays correct as the camera scrolls. Defaults to
+// straight ahead until the player actually points somewhere, so every other weapon
+// (and the bow before it's aimed at least once) behaves exactly as before.
+let mouseWorldX = null, mouseWorldY = null;
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseWorldX = (e.clientX - rect.left) * (W / rect.width) + camera.x;
+  mouseWorldY = (e.clientY - rect.top) * (H / rect.height);
+});
+canvas.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 0) return;
+  const t = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  mouseWorldX = (t.clientX - rect.left) * (W / rect.width) + camera.x;
+  mouseWorldY = (t.clientY - rect.top) * (H / rect.height);
+}, {passive:true});
+function getAimVector() {
+  if (mouseWorldX === null) return { x: player.facing, y: 0 };
+  const px = player.x + player.w/2, py = player.y + player.h/2 - 4;
+  const dx = mouseWorldX - px, dy = mouseWorldY - py;
+  const len = Math.hypot(dx, dy) || 1;
+  return { x: dx/len, y: dy/len };
+}
+
+// ---------- Player projectiles (the bow's arrows) ----------
+let playerProjectiles = [];
+function spawnPlayerArrow(dmg, opts) {
+  const speed = (opts && opts.speed) || 10.5;
+  const pierce = !!(opts && opts.pierce);
+  let dir = { x: player.facing, y: 0 };
+  if (player.weapon.ranged) dir = getAimVector();
+  playerProjectiles.push({
+    x: player.x + player.w/2, y: player.y + player.h/2 - 4,
+    vx: dir.x * speed, vy: dir.y * speed, r: 4, life: 90, dmg,
+    pierce, hitSet: pierce ? new Set() : null
+  });
+}
+function spawnGadgetProjectile(g) {
+  const dir = { x: player.facing, y: 0 };
+  playerProjectiles.push({
+    x: player.x + player.w/2, y: player.y + player.h/2 - 4,
+    vx: dir.x * g.speed, vy: g.arc ? -g.speed*0.6 : 0,
+    r: g.arc ? 7 : 5, life: g.arc ? 130 : 80, dmg: g.dmg,
+    pierce:false, hitSet:null,
+    homing: !!g.homing, speed: g.speed, arc: !!g.arc, explodeRadius: g.explodeRadius || 0,
+    gadgetColor: g.color
+  });
+}
+function gadgetBombBurst(x, y) {
+  for (let i = 0; i < 14; i++) {
+    const ang = (Math.PI*2*i)/14;
+    addParticle({type:'spark', x, y,
+      vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:22, maxLife:22, size:4+Math.random()*3, color:'#ff9d4d'});
+  }
+}
+function updatePlayerProjectiles() {
+  for (const b of playerProjectiles) {
+    if (b.arc) b.vy += GRAVITY * 0.55;
+    if (b.homing) {
+      let target = null, bestD = 260;
+      for (const en of enemies) {
+        if (en.dead || en.buried) continue;
+        const d = Math.hypot((en.x+en.w/2)-b.x, (en.y+en.h/2)-b.y);
+        if (d < bestD) { bestD = d; target = en; }
+      }
+      if (target) {
+        const dx = (target.x+target.w/2)-b.x, dy = (target.y+target.h/2)-b.y;
+        const len = Math.hypot(dx,dy) || 1;
+        // steer toward a fixed cruise speed, not the projectile's own current speed -
+        // otherwise a shot fired away from its target decelerates toward zero instead
+        // of actually turning around, since its own (shrinking) speed keeps feeding back in
+        b.vx += (dx/len*b.speed - b.vx) * 0.12;
+        b.vy += (dy/len*b.speed - b.vy) * 0.12;
+      }
+    }
+    b.x += b.vx;
+    b.y += b.vy;
+    b.life--;
+    if (b.arc && !b.dead) {
+      for (const p of platforms) {
+        if (b.x > p.x && b.x < p.x + p.w && b.y + b.r >= p.y && b.vy >= 0) {
+          resolveSpecialAoeHit(b.dmg, b.explodeRadius, b.x, b.y);
+          gadgetBombBurst(b.x, b.y);
+          b.dead = true;
+          break;
+        }
+      }
+    }
+    if (!b.dead) {
+      for (const en of enemies) {
+        if (en.dead || en.buried) continue;
+        if (b.hitSet && b.hitSet.has(en)) continue;
+        if (rectsOverlap({x:b.x-b.r, y:b.y-b.r, w:b.r*2, h:b.r*2}, {x:en.x, y:en.y, w:en.w, h:en.h})) {
+          damageEnemy(en, b.dmg);
+          if (b.arc) { resolveSpecialAoeHit(b.dmg*0.6, b.explodeRadius, b.x, b.y); gadgetBombBurst(b.x, b.y); }
+          if (b.pierce) b.hitSet.add(en);
+          else { b.dead = true; break; }
+        }
+      }
+    }
+    if (b.life <= 0 || b.x < -60 || b.x > LEVEL_WIDTH + 60 || b.y < -500 || b.y > H + 500) b.dead = true;
+  }
+  playerProjectiles = playerProjectiles.filter(b => !b.dead);
+}
+function drawPlayerProjectiles() {
+  for (const b of playerProjectiles) {
+    if (b.gadgetColor) {
+      ctx.save();
+      ctx.translate(b.x - camera.x, b.y);
+      ctx.fillStyle = b.gadgetColor;
+      ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath(); ctx.arc(0, 0, b.r*1.8, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+      continue;
+    }
+    ctx.save();
+    ctx.translate(b.x - camera.x, b.y);
+    ctx.rotate(Math.atan2(b.vy, b.vx));
+    ctx.strokeStyle = b.pierce ? '#ffd35c' : '#8a6a3a';
+    ctx.lineWidth = b.pierce ? 3 : 2;
+    ctx.beginPath(); ctx.moveTo(-11, 0); ctx.lineTo(5, 0); ctx.stroke();
+    ctx.fillStyle = '#c9d6e3';
+    ctx.beginPath(); ctx.moveTo(5, -3); ctx.lineTo(12, 0); ctx.lineTo(5, 3); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-11, -3); ctx.lineTo(-6, 0); ctx.lineTo(-11, 3); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawProjectiles() {
+  for (const b of projectiles) {
+    ctx.save();
+    ctx.translate(b.x - camera.x, b.y);
+    ctx.rotate(frame * 0.25);
+    if (b.kind === 'bomb') {
+      ctx.fillStyle = '#2b2b33';
+      ctx.beginPath(); ctx.arc(0, 0, b.r, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#c9a24a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -b.r);
+      ctx.quadraticCurveTo(4, -b.r-6, 2, -b.r-9);
+      ctx.stroke();
+      ctx.fillStyle = frame % 10 < 5 ? '#ff5a3c' : '#ffcf4a';
+      ctx.beginPath(); ctx.arc(2, -b.r-10, 2, 0, Math.PI*2); ctx.fill();
+    } else {
+      const pal = PROJECTILE_PALETTE[b.kind] || PROJECTILE_PALETTE.fireball;
+      const grad = ctx.createRadialGradient(0, 0, 1, 0, 0, b.r+3);
+      grad.addColorStop(0, pal.c1);
+      grad.addColorStop(1, pal.c2);
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(0, 0, b.r+3, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+function drawHammerThrow() {
+  const h = player.hammerThrow;
+  if (!h) return;
+  ctx.save();
+  ctx.translate(h.x - camera.x, h.y);
+  ctx.rotate(frame * 0.5);
+  ctx.fillStyle = '#7a5a3a';
+  ctx.fillRect(-2, -13, 4, 26);
+  ctx.fillStyle = '#6b6f76';
+  ctx.fillRect(-10, -18, 20, 16);
+  ctx.restore();
+}
+
+// Greataxe special: the axe leaves the player's hand, rockets straight up, hangs
+// briefly at the peak (with a landing-zone telegraph so the impact is readable),
+// then plummets back down onto its launch point.
+function drawSkyAxe() {
+  if (!player.skyAxe || player.specialType !== 'greataxe') return;
+  const totalT = 50;
+  const t = totalT - player.specialTimer;
+  const { x, y } = player.skyAxe;
+  let offsetY;
+  if (t < 16) {
+    offsetY = -(t / 16) * 220;
+  } else if (t < 30) {
+    offsetY = -220 + Math.sin((t - 16) * 0.5) * 6;
+  } else {
+    const p = (t - 30) / 18;
+    offsetY = -220 + p * p * 220;
+  }
+  if (t >= 16) {
+    drawAttackTelegraph(x - camera.x, y, 90);
+  }
+  ctx.save();
+  ctx.translate(x - camera.x, y + offsetY);
+  ctx.rotate(frame * 0.35);
+  ctx.fillStyle = '#5a4632';
+  ctx.fillRect(-15, -2, 30, 4);
+  ctx.fillStyle = '#5a6b7a';
+  ctx.beginPath();
+  ctx.moveTo(9, -16); ctx.quadraticCurveTo(33, -18, 29, 2);
+  ctx.quadraticCurveTo(33, 20, 9, 18);
+  ctx.quadraticCurveTo(15, 2, 9, -16);
+  ctx.fill();
+  ctx.strokeStyle = '#3a3a3a';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function explodeAt(cx, cy, radius, dmg) {
+  for (let i = 0; i < 16; i++) {
+    const ang = (Math.PI*2*i)/16;
+    addParticle({type:'spark', x:cx, y:cy,
+      vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, life:22, maxLife:22, size:4+Math.random()*3, color:'#ff9d4d'});
+  }
+  const d = Math.hypot((player.x+player.w/2)-cx, (player.y+player.h/2)-cy);
+  if (d < radius) damagePlayer(dmg, 40);
+}
+
+// ---------- Ground hazards (a boss signature move can leave lingering danger zones) ----------
+let groundHazards = [];
+function spawnGroundHazard(x, groundY, kind, life, dmgPerTick) {
+  groundHazards.push({ x, groundY, kind, life, maxLife: life, dmgPerTick, tickTimer: 0 });
+}
+function updateGroundHazards() {
+  for (const hz of groundHazards) {
+    hz.life--;
+    if (hz.tickTimer > 0) hz.tickTimer--;
+    const hb = { x: hz.x - 24, y: hz.groundY - 16, w: 48, h: 16 };
+    if (hz.tickTimer <= 0 && rectsOverlap(hb, player)) {
+      damagePlayer(hz.dmgPerTick, 20);
+      hz.tickTimer = 24;
+    }
+  }
+  groundHazards = groundHazards.filter(hz => hz.life > 0);
+}
+function drawGroundHazards() {
+  for (const hz of groundHazards) {
+    const t = Math.max(0, hz.life / hz.maxLife);
+    ctx.save();
+    ctx.translate(hz.x - camera.x, hz.groundY);
+    if (hz.kind === 'vine') {
+      ctx.globalAlpha = Math.min(1, t * 1.6);
+      ctx.fillStyle = '#3d7a2a';
+      for (const ox of [-14, 0, 14]) {
+        ctx.beginPath();
+        ctx.moveTo(ox - 5, 2); ctx.lineTo(ox + 5, 2); ctx.lineTo(ox, -22 * t - 4);
+        ctx.fill();
+      }
+      ctx.strokeStyle = '#1e4a12';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      ctx.globalAlpha = 0.55 + 0.25 * Math.sin(frame * 0.3);
+      const grad = ctx.createRadialGradient(0, -4, 2, 0, -4, 28);
+      grad.addColorStop(0, '#ffd35c');
+      grad.addColorStop(1, '#a8200a');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(0, -4, 28 * Math.max(0.35, t), 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+// Boss "signature move" - the every-3rd-attack burst dispatches here for the four
+// story bosses instead of the generic AoE explosion, so each one reads as unique.
+function resolveBossSignature(en) {
+  if (en.signature === 'lava') {
+    // 熔岩土龍: breathes a line of molten pools that linger and keep burning
+    const dir = en.dir || (player.x > en.x ? 1 : -1);
+    for (let i = 0; i < 3; i++) {
+      spawnGroundHazard(en.x + en.w/2 + dir * (50 + i * 58), en.groundY, 'lava', 260, en.dmg * 0.35);
+    }
+  } else if (en.signature === 'ink') {
+    // 深海龍王: a wide fan of ink bolts instead of one bolt
+    const baseAng = Math.atan2((player.y + player.h/2) - (en.y + en.h/2), (player.x + player.w/2) - (en.x + en.w/2));
+    for (let i = -2; i <= 2; i++) {
+      const ang = baseAng + i * 0.22;
+      spawnProjectile(en.x + en.w/2, en.y + en.h/2, Math.cos(ang) * 5.5, Math.sin(ang) * 5.5, en.dmg * 0.7, 'ink');
+    }
+  } else if (en.signature === 'gale') {
+    // 飛龍亞基爾: a rapid triple dash instead of a single pass
+    en.galeDashesLeft = 2;
+    const dx = (player.x + player.w/2) - (en.x + en.w/2), dy = (player.y + player.h/2) - (en.y + en.h/2);
+    const len = Math.hypot(dx, dy) || 1;
+    en.dashDirX = dx / len; en.dashDirY = dy / len;
+    en.dashing = true;
+    en.dashTimer = 0;
+  } else if (en.signature === 'vine') {
+    // 草神狼: thorny vines erupt in a ring around it and briefly root anyone caught
+    for (let i = 0; i < 6; i++) {
+      const ang = (Math.PI * 2 * i) / 6;
+      spawnGroundHazard(en.x + en.w/2 + Math.cos(ang) * 70, en.groundY, 'vine', 90, en.dmg * 0.5);
+    }
+    if (Math.hypot((player.x+player.w/2)-(en.x+en.w/2), (player.y+player.h/2)-(en.y+en.h/2)) < 110) {
+      player.rootedTimer = 50;
+    }
+  } else {
+    explodeAt(en.x + en.w/2, en.y + en.h/2, 100, en.dmg * 1.6);
+  }
+}
+
+// ---------- Weapon select screen ----------
+const weaponOrder = ['sword','hammer','spear'];
+let menuSelectIndex = 0;
+
+function updateMenu() {
+  if (pressedOnce('ArrowLeft', menuKeyState.left) || pressedOnce('KeyA', menuKeyState.left)) {
+    menuSelectIndex = (menuSelectIndex + weaponOrder.length - 1) % weaponOrder.length;
+  }
+  if (pressedOnce('ArrowRight', menuKeyState.right) || pressedOnce('KeyD', menuKeyState.right)) {
+    menuSelectIndex = (menuSelectIndex + 1) % weaponOrder.length;
+  }
+  if (pressedOnce('Space', menuKeyState.space) || pressedOnce('Enter', menuKeyState.enter) || pressedOnce('KeyJ', menuKeyState.j)) {
+    startGame(weaponOrder[menuSelectIndex]);
+  }
+}
+const menuKeyState = { left:{}, right:{}, space:{}, enter:{}, j:{} };
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+
+  if (state === 'menu') {
+    weaponOrder.forEach((key, i) => {
+      const cardX = 90 + i * 280;
+      const cardY = 210;
+      if (mx > cardX && mx < cardX+240 && my > cardY && my < cardY+300) {
+        menuSelectIndex = i;
+        startGame(key);
+      }
+    });
+  } else if (overlay === 'armorshop') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        buyShopItem(card.id);
+      }
+    }
+  } else if (overlay === 'weaponshop') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        if (card.kind === 'weapon') selectOrBuyWeapon(card.id);
+        else buyShopItem(card.id);
+      }
+    }
+  } else if (overlay === 'shieldshop') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        selectOrBuyShield(card.id);
+      }
+    }
+  } else if (overlay === 'armorequip') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        selectOrBuyArmor(card.id);
+      }
+    }
+  } else if (overlay === 'bag') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        if (card.kind === 'weapon') { if (player.unlockedWeapons.has(card.id)) player.weapon = WEAPONS[card.id]; }
+        else if (card.kind === 'gadget') { if (player.unlockedGadgets.has(card.id)) player.equippedGadget = card.id; }
+      }
+    }
+  } else if (overlay === 'quest') {
+    if (clickedOverlayCloseButton(mx, my)) { overlay = null; return; }
+    for (const card of villageCardRects) {
+      if (mx > card.x && mx < card.x+card.w && my > card.y && my < card.y+card.h) {
+        enterLevel(card.id);
+      }
+    }
+  }
+});
+
+// Full fresh run: resets every stat and shop purchase, then loads the first level.
+function startGame(weaponKey) {
+  selectedWeapon = weaponKey;
+  player.weapon = WEAPONS[weaponKey];
+  player.maxHp = 100; player.maxHpPotions = 3; player.maxFpPotions = 3;
+  player.gold = 0;
+  player.weaponDmgBonus = 0;
+  player.shopLevels = { weapon:0, armor:0, mana:0, hpflask:0, fpflask:0 };
+  player.unlockedWeapons = new Set(['sword', 'hammer', 'spear']);
+  player.shield = SHIELDS.none;
+  player.unlockedShields = new Set(['none']);
+  player.armor = ARMORS.none;
+  player.unlockedArmors = new Set(['none']);
+  player.unlockedGadgets = new Set();
+  player.equippedGadget = null;
+  player.bossDefeated = { volcano:false, ocean:false, sky:false, jungle:false };
+  worldCompleteBanner = 0;
+  frame = 0;
+  enterLevel('redmoon');
+}
+
+// Load a level's geometry/enemies and place the player at its start. Called both for
+// the first level and every time a portal or quest sends the player somewhere new -
+// gold, shop levels, and weapon bonuses are NOT touched here, only startGame() resets those.
+function enterLevel(levelId) {
+  const def = LEVEL_DEFS[levelId];
+  currentLevelId = levelId;
+  platforms = def.isVillage ? VILLAGE_PLATFORMS : (def.platforms || ADVENTURE_PLATFORMS);
+  LEVEL_WIDTH = def.isVillage ? VILLAGE_WIDTH : (def.width || (ADVENTURE_PLATFORMS[ADVENTURE_PLATFORMS.length-1].x + ADVENTURE_PLATFORMS[ADVENTURE_PLATFORMS.length-1].w));
+
+  player.x = 60; player.y = GROUND_Y-60; player.vx=0; player.vy=0;
+  player.hp = player.maxHp; player.fp = player.maxFp; player.sta = player.maxSta;
+  player.hpPotions = player.maxHpPotions;
+  player.fpPotions = player.maxFpPotions;
+  player.dead = false;
+  player.lastGroundX = player.x;
+  player.lastGroundY = player.y;
+  player.attackHold = { holding:false, startFrame:0, specialFired:false };
+  player.specialCooldown = 0;
+  player.specialType = null;
+  player.specialTimer = 0;
+  player.specialPhase = 0;
+  player.hammerThrow = null;
+  player.dashSpecial = null;
+  player.skyAxe = null;
+  player.rootedTimer = 0;
+  player.potionCooldown = 0;
+  player.gadgetCooldown = 0;
+  player.flightTimer = 0;
+  player.flightUsed = false;
+  camera.x = 0;
+  levelTimeLeft = (def.isVillage || def.isArena) ? Infinity : 130*60;
+  overlay = null;
+  spawnEnemiesForLevel(levelId);
+  if (!def.isVillage) spawnCoins(); else coins = [];
+  particles = [];
+  projectiles = [];
+  playerProjectiles = [];
+  groundHazards = [];
+  gadgetDrops = [];
+  gadgetPickupBanner = null;
+  if (levelId === 'arena') { arenaWave = 0; arenaWaveDelay = 40; arenaBanner = ''; arenaBannerTimer = 0; }
+  state = 'playing';
+}
+
+// ---------- Update: Player ----------
+let villageJumpPrev = false;
+function updatePlayer() {
+  if (player.dead) return;
+  if (overlay) return; // frozen while a village shop/quest modal is open
+
+  player.blocking = !!keys['KeyL'] && player.attackWindup === 0 && !player.attacking;
+  if (player.rootedTimer > 0) player.rootedTimer--;
+
+  const speed = player.rootedTimer > 0 ? 0
+    : player.blocking ? (player.shield.locksMovement ? 0 : (player.shield.fastBlock ? 4.1 : 1.3))
+    : 4.1;
+  let moveInput = 0;
+  if (keys['ArrowLeft'] || keys['KeyA']) moveInput -= 1;
+  if (keys['ArrowRight'] || keys['KeyD']) moveInput += 1;
+
+  if (moveInput !== 0) {
+    player.vx += moveInput * 0.9;
+    player.facing = moveInput > 0 ? 1 : -1;
+    player.walkCycle += 0.25;
+  } else {
+    player.walkCycle = 0;
+  }
+  player.vx = Math.max(-speed, Math.min(speed, player.vx));
+  player.vx *= player.onGround ? GROUND_FRICTION : 0.95;
+
+  // jump
+  const jumpDown = !!(keys['Space'] || keys['ArrowUp'] || keys['KeyW']);
+  const wasOnGround = player.onGround;
+  if (jumpDown && wasOnGround) {
+    player.vy = -13.2;
+    player.onGround = false;
+  }
+  // in the village, pressing jump near a shop or the tree opens that modal instead
+  if (currentLevelId === 'village' && jumpDown && !villageJumpPrev && wasOnGround) {
+    const px = player.x + player.w/2;
+    if (Math.abs(px - VILLAGE_WEAPON_SHOP_X) < 70) overlay = 'weaponshop';
+    else if (Math.abs(px - VILLAGE_ARMOR_SHOP_X) < 70) overlay = 'armorshop';
+    else if (Math.abs(px - VILLAGE_SHIELD_SHOP_X) < 70) overlay = 'shieldshop';
+    else if (Math.abs(px - VILLAGE_ARMOR_EQUIP_SHOP_X) < 70) overlay = 'armorequip';
+    else if (Math.abs(px - VILLAGE_TREE_X) < 70) overlay = 'quest';
+    // walking into a shop, not jumping into it - cancel the incidental hop above so
+    // physics resume grounded (not mid-air) once the overlay closes again
+    if (overlay) { player.vy = 0; player.onGround = true; }
+  }
+  villageJumpPrev = jumpDown;
+
+  // wings gadget: holding jump while airborne (and not exhausted this trip) hovers
+  // instead of falling, for up to GADGETS.wings.flightTime frames
+  let flying = false;
+  if (player.equippedGadget === 'wings' && jumpDown && !player.onGround && !player.flightUsed) {
+    if (player.flightTimer < GADGETS.wings.flightTime) {
+      flying = true;
+      player.flightTimer++;
+      player.vy = -3.2;
+      if (player.flightTimer >= GADGETS.wings.flightTime) player.flightUsed = true;
+    }
+  }
+  if (!flying) player.vy += GRAVITY;
+  player.x += player.vx;
+  player.y += player.vy;
+
+  // clamp to level bounds
+  player.x = Math.max(0, Math.min(LEVEL_WIDTH - player.w, player.x));
+
+  // ground collision against platforms (simple: only lands if within platform x-range)
+  player.onGround = false;
+  for (const p of platforms) {
+    const px1 = p.x, px2 = p.x + p.w;
+    const feetY = player.y + player.h;
+    if (player.x + player.w > px1 + 2 && player.x < px2 - 2) {
+      if (feetY >= p.y && feetY - player.vy <= p.y + 4 && player.vy >= 0) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+    }
+  }
+  if (player.onGround) {
+    player.lastGroundX = player.x;
+    player.lastGroundY = player.y;
+    player.flightTimer = 0;
+    player.flightUsed = false;
+  }
+  if (player.y > H + 200) {
+    // fell into a gap: respawn on the last safe platform with a penalty instead of an outright kill
+    player.x = player.lastGroundX;
+    player.y = player.lastGroundY;
+    player.vx = 0; player.vy = 0;
+    player.hp -= 25;
+    player.invuln = 60;
+  }
+
+  // stamina regen (FP does NOT regenerate on its own - only potions restore it)
+  if (player.sta < player.maxSta) player.sta = Math.min(player.maxSta, player.sta + 0.35);
+
+  // attack: tap J for a normal swing, hold it past a short threshold for the weapon's
+  // FP-costing special. The special only fires once per hold; if it can't (no FP, on
+  // cooldown), releasing still falls back to a normal tap attack.
+  if (player.attackCooldown > 0) player.attackCooldown--;
+  if (player.specialCooldown > 0) player.specialCooldown--;
+  if (player.attackWindup > 0) {
+    player.attackWindup--;
+    if (player.attackWindup === 0) {
+      if (player.weapon.ranged) spawnPlayerArrow(currentWeaponDmg());
+      else resolveAttackHit();
+    }
+  }
+  if (player.attackWindup === 0 && !player.specialType) player.attacking = false;
+
+  const attackKeyDown = !!keys['KeyJ'];
+  const canStartAction = !player.blocking && player.attackCooldown <= 0 && !player.specialType;
+  if (attackKeyDown) {
+    if (!player.attackHold.holding) {
+      player.attackHold.holding = true;
+      player.attackHold.startFrame = frame;
+      player.attackHold.specialFired = false;
+      player.attackHold.thresholdChecked = false;
+    } else if (!player.attackHold.thresholdChecked && frame - player.attackHold.startFrame >= ATTACK_HOLD_THRESHOLD) {
+      player.attackHold.thresholdChecked = true;
+      if (canStartAction && player.specialCooldown <= 0 && player.fp >= player.weapon.specialCost) {
+        startSpecial();
+        player.attackHold.specialFired = true;
+      }
+    }
+  } else if (player.attackHold.holding) {
+    if (!player.attackHold.specialFired && canStartAction && player.sta >= player.weapon.staminaCost) {
+      player.sta -= player.weapon.staminaCost;
+      player.attackCooldown = player.weapon.cooldown;
+      player.attackWindup = player.weapon.windup;
+      player.attacking = true;
+      player.hitThisSwing = false;
+    }
+    player.attackHold.holding = false;
+  }
+
+  updateSpecial();
+
+  // gadget: I fires the equipped monster-drop gadget (independent of the weapon's own
+  // attack/special and its cooldown) - wings is passive and doesn't use this at all
+  if (player.gadgetCooldown > 0) player.gadgetCooldown--;
+  if (pressedOnce('KeyI', gadgetKeyState) && player.equippedGadget) {
+    const g = GADGETS[player.equippedGadget];
+    if (g && !g.passive && player.gadgetCooldown <= 0 && player.sta >= g.staminaCost) {
+      player.sta -= g.staminaCost;
+      player.gadgetCooldown = g.cooldown;
+      spawnGadgetProjectile(g);
+    }
+  }
+
+  // potions: 1 = HP flask, 2 = FP flask - a short shared cooldown stops a held key spamming
+  if (player.potionCooldown > 0) player.potionCooldown--;
+  if (player.potionCooldown <= 0) {
+    if (pressedOnce('Digit1', potionKeyState.hp) && player.hpPotions > 0) {
+      player.hpPotions--;
+      player.hp = Math.min(player.maxHp, player.hp + 40);
+      player.potionCooldown = 20;
+      spawnPotionSparkle('#ff6b5c');
+    } else if (pressedOnce('Digit2', potionKeyState.fp) && player.fpPotions > 0) {
+      player.fpPotions--;
+      player.fp = Math.min(player.maxFp, player.fp + 45);
+      player.potionCooldown = 20;
+      spawnPotionSparkle('#5c9dff');
+    }
+  }
+
+  if (player.invuln > 0) player.invuln--;
+  if (player.blockFlash > 0) player.blockFlash--;
+
+  // camera follow
+  const targetCam = Math.max(0, Math.min(LEVEL_WIDTH - W, player.x - W/2));
+  camera.x += (targetCam - camera.x) * 0.12;
+
+  if (player.hp <= 0 && !player.dead) {
+    player.dead = true;
+    setTimeout(()=>{ if (state==='playing') state = 'lose'; }, 600);
+  }
+
+  // reach the portal -> travel back to the village, but only once it's actually
+  // there - story levels keep it hidden (and this trigger inert) until their boss falls
+  {
+    const def = LEVEL_DEFS[currentLevelId];
+    const portalReady = !def.requiresBoss || player.bossDefeated[currentLevelId];
+    if (!def.isVillage && portalReady && player.x > LEVEL_WIDTH - 160) {
+      enterLevel('village');
+    }
+  }
+
+  updateCoins();
+  updateGadgetDrops();
+}
+const potionKeyState = { hp:{}, fp:{} };
+const gadgetKeyState = {};
+
+// Routes all enemy damage through the shield: blocking cuts damage sharply and
+// chips stamina instead, so timing the block against a telegraphed attack matters.
+function damagePlayer(amount, invulnFrames) {
+  if (player.invuln > 0) return;
+  // armor is passive and always active; the shield's block reduction (while held) stacks on top
+  let dmg = amount * (1 - (player.armor.defenseReduction || 0));
+  if (player.blocking) {
+    dmg = dmg * player.shield.blockReduction;
+    if (player.shield.manaCost) player.fp = Math.max(0, player.fp - amount * 0.5);
+    else player.sta = Math.max(0, player.sta - amount * 0.5);
+    player.blockFlash = 10;
+    if (player.shield.thorns) retaliateNearbyEnemy();
+  } else if (player.armor.thorns) {
+    retaliateNearbyEnemy();
+  }
+  player.hp -= dmg;
+  player.invuln = invulnFrames || 45;
+}
+
+// Spike shield retaliation: without threading the specific attacker through every
+// damagePlayer() call site (melee bumps, explosions, projectiles), approximate
+// "reflect to attacker" by striking whichever living enemy is closest, if any is
+// actually within thorn range - which in practice is whoever just hit you in melee.
+function retaliateNearbyEnemy() {
+  const cx = player.x + player.w/2, cy = player.y + player.h/2;
+  let closest = null, closestDist = 90;
+  for (const en of enemies) {
+    if (en.dead || en.buried) continue;
+    const d = Math.hypot((en.x+en.w/2)-cx, (en.y+en.h/2)-cy);
+    if (d < closestDist) { closest = en; closestDist = d; }
+  }
+  if (closest) {
+    damageEnemy(closest, 12);
+    spawnSparkleAt(closest.x+closest.w/2, closest.y+closest.h/2, '#ff3b3b');
+  }
+}
+
+function attackHitbox(reachOverride) {
+  const w = player.weapon;
+  const reach = reachOverride || w.range;
+  const x = player.facing > 0 ? player.x + player.w : player.x - reach;
+  return { x, y: player.y - 6, w: reach, h: player.h + 12 };
+}
+
+function resolveAttackHit(dmgOverride, reachOverride) {
+  const hb = attackHitbox(reachOverride);
+  const dmg = dmgOverride != null ? dmgOverride : currentWeaponDmg();
+  for (const en of enemies) {
+    if (en.dead || en.buried) continue;
+    if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
+      damageEnemy(en, dmg);
+    }
+  }
+}
+
+// Sword special: hits everything in a radius around a center point (the player by
+// default, or an explicit point - e.g. where a thrown weapon lands).
+function resolveSpecialAoeHit(dmg, radius, atX, atY) {
+  const cx = atX != null ? atX : player.x + player.w/2;
+  const cy = atY != null ? atY : player.y + player.h/2;
+  for (const en of enemies) {
+    if (en.dead || en.buried) continue;
+    const ex = en.x + en.w/2, ey = en.y + en.h/2;
+    if (Math.hypot(ex-cx, ey-cy) <= radius) damageEnemy(en, dmg);
+  }
+}
+
+// ---------- Weapon specials (long-press attack) ----------
+function startSpecial() {
+  const type = player.weapon.key;
+  player.fp -= player.weapon.specialCost;
+  player.specialCooldown = player.weapon.specialCooldown;
+  player.specialType = type;
+  player.attacking = true;
+
+  if (type === 'sword') {
+    player.specialTimer = 26;
+  } else if (type === 'hammer') {
+    player.specialTimer = 1;
+    player.hammerThrow = {
+      x: player.x + player.w/2, y: player.y + player.h/2 - 4,
+      vx: player.facing * 7.5,
+      dist: 0, maxDist: 230, returning: false,
+      hitSet: new Set()
+    };
+  } else if (type === 'spear') {
+    player.specialTimer = 44;
+  } else if (type === 'dualdagger') {
+    player.specialTimer = 20;
+    player.dashSpecial = { hitSet: new Set() };
+  } else if (type === 'greataxe') {
+    // thrown straight up, hangs at the peak, then crashes back down where it launched
+    player.specialTimer = 50;
+    player.skyAxe = { x: player.x + player.w/2, y: player.y + player.h/2 };
+  } else if (type === 'whip') {
+    player.specialTimer = 40;
+  } else if (type === 'greatsword') {
+    player.specialTimer = 34;
+  } else if (type === 'trident') {
+    player.specialTimer = 36;
+  } else if (type === 'katana') {
+    player.specialTimer = 18;
+  } else if (type === 'shortblade') {
+    player.specialTimer = 30;
+  } else if (type === 'bow') {
+    player.specialTimer = 24;
+  } else if (type === 'flail') {
+    player.specialTimer = 36;
+  } else if (type === 'scythe') {
+    player.specialTimer = 30;
+  }
+}
+
+function updateSpecial() {
+  if (!player.specialType) return;
+  const type = player.specialType;
+
+  if (type === 'sword') {
+    player.specialTimer--;
+    if (player.specialTimer === 16) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 1.4, 62);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'hammer') {
+    updateHammerThrow();
+  } else if (type === 'spear') {
+    player.specialTimer--;
+    if ([38, 30, 22, 14, 6].includes(player.specialTimer)) {
+      resolveAttackHit(currentWeaponDmg() * 0.75, player.weapon.range + 8);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'dualdagger') {
+    // gale dash: blink forward, damaging everything passed through once
+    player.x += player.facing * 9;
+    player.x = Math.max(0, Math.min(LEVEL_WIDTH - player.w, player.x));
+    const hb = { x: player.x, y: player.y, w: player.w, h: player.h };
+    for (const en of enemies) {
+      if (en.dead || en.buried || player.dashSpecial.hitSet.has(en)) continue;
+      if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
+        damageEnemy(en, currentWeaponDmg() * 1.3);
+        player.dashSpecial.hitSet.add(en);
+      }
+    }
+    player.specialTimer--;
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+      player.dashSpecial = null;
+    }
+  } else if (type === 'greataxe') {
+    // impact lands when the axe crashes back down at its launch point, not the
+    // player's current position - see drawSkyAxe() for the matching flight path
+    player.specialTimer--;
+    if (player.specialTimer === 8) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 1.8, 90, player.skyAxe.x, player.skyAxe.y);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+      player.skyAxe = null;
+    }
+  } else if (type === 'whip') {
+    player.specialTimer--;
+    if ([34, 26, 18, 10].includes(player.specialTimer)) {
+      resolveAttackHit(currentWeaponDmg() * 0.85, player.weapon.range + 30);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'greatsword') {
+    player.specialTimer--;
+    if (player.specialTimer === 20 || player.specialTimer === 8) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 1.1, 70);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'trident') {
+    player.specialTimer--;
+    if ([28, 18, 8].includes(player.specialTimer)) {
+      resolveAttackHit(currentWeaponDmg() * 0.9, player.weapon.range + 15);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'katana') {
+    // one decisive cut, timed to land mid-draw
+    player.specialTimer--;
+    if (player.specialTimer === 8) {
+      resolveAttackHit(currentWeaponDmg() * 2.2, player.weapon.range + 10);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'shortblade') {
+    player.specialTimer--;
+    if ([24, 18, 12, 6].includes(player.specialTimer)) {
+      resolveAttackHit(currentWeaponDmg() * 0.9, player.weapon.range + 6);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'bow') {
+    // one heavily-aimed, piercing shot instead of a spread - a real "sniper" pick
+    player.specialTimer--;
+    if (player.specialTimer === 14) {
+      spawnPlayerArrow(currentWeaponDmg() * 3.2, { speed: 16, pierce: true });
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'flail') {
+    player.specialTimer--;
+    if ([28, 18, 8].includes(player.specialTimer)) {
+      resolveSpecialAoeHit(currentWeaponDmg() * 0.8, 70);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  } else if (type === 'scythe') {
+    player.specialTimer--;
+    if (player.specialTimer === 14) {
+      resolveAttackHit(currentWeaponDmg() * 1.6, player.weapon.range + 40);
+    }
+    if (player.specialTimer <= 0) {
+      player.specialType = null;
+      player.attacking = false;
+    }
+  }
+}
+
+function checkHammerHits(h) {
+  const hb = {x: h.x-18, y: h.y-18, w:36, h:36};
+  for (const en of enemies) {
+    if (en.dead || en.buried || h.hitSet.has(en)) continue;
+    if (rectsOverlap(hb, {x:en.x,y:en.y,w:en.w,h:en.h})) {
+      damageEnemy(en, currentWeaponDmg() * 1.1);
+      h.hitSet.add(en);
+    }
+  }
+}
+
+function updateHammerThrow() {
+  const h = player.hammerThrow;
+  if (!h) { player.specialType = null; return; }
+  const speed = 7.5;
+  if (!h.returning) {
+    h.x += h.vx;
+    h.dist += Math.abs(h.vx);
+    checkHammerHits(h);
+    if (h.dist >= h.maxDist) h.returning = true;
+  } else {
+    const dx = (player.x + player.w/2) - h.x;
+    const dy = (player.y + player.h/2 - 4) - h.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    h.x += dx/dist * speed;
+    h.y += dy/dist * speed;
+    checkHammerHits(h);
+    if (dist < 16) {
+      player.hammerThrow = null;
+      player.specialType = null;
+      player.attacking = false;
+    }
+  }
+}
+
+function spawnSparkleAt(x, y, color, count) {
+  for (let i = 0; i < (count || 12); i++) {
+    const ang = Math.random() * Math.PI * 2;
+    addParticle({type:'spark', x, y,
+      vx:Math.cos(ang)*2.2, vy:Math.sin(ang)*2.2-1.5, life:26, maxLife:26, size:2.5+Math.random()*2.5, color});
+  }
+}
+function spawnPotionSparkle(color) {
+  spawnSparkleAt(player.x + player.w/2, player.y + player.h/2, color);
+}
+
+function damageEnemy(en, dmg) {
+  en.hp -= dmg;
+  en.hitFlash = 8;
+  if (en.hp <= 0 && !en.dead) {
+    en.dead = true;
+    if (currentLevelId === 'arena') player.gold += en.isBoss ? 30 : 3;
+    if (en.isBoss && LEVEL_DEFS[currentLevelId] && LEVEL_DEFS[currentLevelId].requiresBoss) {
+      const wasComplete = QUEST_LEVEL_IDS.every(id => player.bossDefeated[id]);
+      player.bossDefeated[currentLevelId] = true;
+      const nowComplete = QUEST_LEVEL_IDS.every(id => player.bossDefeated[id]);
+      if (!wasComplete && nowComplete) worldCompleteBanner = 300;
+    }
+    if (en.type === 'bomb') {
+      en.exploding = true;
+      en.explodeTimer = 30;
+      en.explodeRadius = en.isBoss ? 130 : 90;
+      en.explodeDmg = en.isBoss ? 22 : 14;
+    } else {
+      for (let i=0;i<10;i++) {
+        addParticle({type:'spark', x:en.x+en.w/2, y:en.y+en.h/2,
+          vx:(Math.random()-0.5)*6, vy:(Math.random()-0.5)*6-2, life:20,maxLife:20, size:3+Math.random()*3, color:'#7fffb0'});
+      }
+    }
+    // grunts have a chance to drop their signature gadget - keeps kills rewarding
+    // even outside the arena, and outside pure gold
+    if (!en.isBoss) {
+      const gadgetKey = GADGET_KIND_TO_KEY[en.kind];
+      if (gadgetKey && Math.random() < GADGET_DROP_CHANCE) {
+        spawnGadgetDrop(en.x + en.w/2, en.y + en.h/2, gadgetKey);
+      }
+    }
+  }
+}
+
+function rectsOverlap(a,b) {
+  return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+}
+
+// ---------- Update: Enemies ----------
+function updateEnemies() {
+  for (const en of enemies) {
+    if (en.dead) {
+      if (en.type === 'bomb' && en.exploding) {
+        en.explodeTimer--;
+        if (en.explodeTimer === 6) {
+          explodeAt(en.x+en.w/2, en.y+en.h/2, en.explodeRadius || 90, en.explodeDmg || 14);
+        }
+        // without this, a dead ground enemy's exploding flag would never clear,
+        // so it would linger drawn forever and the arena would never see it as cleared
+        if (en.explodeTimer <= 0) en.exploding = false;
+      }
+      continue;
+    }
+    if (en.hitFlash > 0) en.hitFlash--;
+
+    if (en.buried) {
+      en.y = en.groundY - en.h;
+      if (!en.emerging) {
+        const dx = player.x - (en.x + en.w/2);
+        const dy = player.y - en.y;
+        // stays hidden until the dragon walks close, then bursts out of the ground
+        if (Math.abs(dx) < 150 && Math.abs(dy) < 160) {
+          en.emerging = true;
+          en.emergeDuration = 28;
+          en.emergeTimer = en.emergeDuration;
+        }
+      } else {
+        en.emergeTimer--;
+        if (en.emergeTimer <= 0) { en.buried = false; en.emerging = false; }
+      }
+      continue;
+    }
+
+    if (en.type === 'bomb') {
+      const dx = player.x - en.x;
+      const range = en.isBoss ? 440 : 360;
+      const inRange = Math.abs(dx) < range && Math.abs(player.y - en.y) < 110;
+      const closeGap = en.attackMode === 'melee' ? 30 : 160;
+      // walk back and forth, face and approach the player if in range - frozen during its telegraph wind-up
+      if (!en.telegraph) {
+        if (inRange) {
+          en.dir = dx > 0 ? 1 : -1;
+          if (Math.abs(dx) > closeGap) en.x += en.dir * en.speed;
+        } else if (frame % 90 === 0) {
+          en.dir *= -1;
+        } else {
+          en.x += en.dir * en.speed;
+        }
+        // stay on its own platform - turn around at the edge instead of walking over a gap
+        if (en.x <= en.homeMinX) { en.x = en.homeMinX; en.dir = 1; }
+        if (en.x >= en.homeMaxX) { en.x = en.homeMaxX; en.dir = -1; }
+      }
+      en.y = en.groundY - en.h;
+
+      if (en.attackCooldown > 0) en.attackCooldown--;
+      if (!en.telegraph && inRange && en.attackCooldown<=0) {
+        en.telegraph = true;
+        en.dir = dx > 0 ? 1 : -1;
+        // bosses use every 3rd attack for a longer-telegraphed AoE burst instead of their normal hit
+        en.atkCount = (en.atkCount || 0) + 1;
+        en.burst = en.isBoss && (en.atkCount % 3 === 0);
+        en.attackWindup = en.burst ? 50 : 30;
+      }
+      if (en.telegraph) {
+        en.attackWindup--;
+        if (en.attackWindup <= 0) {
+          en.telegraph = false;
+          en.attackCooldown = en.burst ? 160 : 110;
+          if (en.burst) {
+            resolveBossSignature(en);
+          } else if (en.attackMode === 'melee') {
+            if (rectsOverlap(en, player)) damagePlayer(en.dmg);
+          } else {
+            throwBomb(en);
+          }
+        }
+      }
+    } else if (en.type === 'drone') {
+      en.phase += 0.05;
+      const dx = player.x - en.x;
+      const dy = player.y - en.y;
+      const dist = Math.hypot(dx,dy);
+      const engageDist = en.isBoss ? 360 : 300;
+
+      if (en.charging) {
+        en.chargeTimer--;
+        if (en.chargeTimer <= 0) {
+          en.charging = false;
+          if (en.galeFollowup) {
+            // mid-combo dash from a triggered "gale" signature - not a fresh decision
+            en.galeFollowup = false;
+            en.dashing = true;
+            const len = Math.hypot(dx,dy) || 1;
+            en.dashDirX = dx/len; en.dashDirY = dy/len;
+          } else {
+            en.atkCount = (en.atkCount || 0) + 1;
+            const burst = en.isBoss && (en.atkCount % 3 === 0);
+            if (burst) {
+              resolveBossSignature(en);
+              en.attackCooldown = 150;
+            } else if (en.attackMode === 'cast') {
+              const len = Math.hypot(dx,dy) || 1;
+              spawnCastProjectile(en, dx/len, dy/len);
+              en.attackCooldown = en.isBoss ? 130 : 90;
+            } else {
+              en.dashing = true;
+              const len = Math.hypot(dx,dy) || 1;
+              en.dashDirX = dx/len; en.dashDirY = dy/len;
+            }
+          }
+        }
+      } else if (!en.dashing) {
+        en.y = en.baseY + Math.sin(en.phase)*14;
+        if (dist < 240) {
+          en.x += Math.sign(dx) * en.speed * 0.6;
+        }
+        en.dashTimer++;
+        if (en.dashTimer > 110 && dist < engageDist && en.attackCooldown<=0) {
+          en.charging = true;
+          en.chargeTimer = 20; // ~0.33s wind-up flash before the dive/cast
+          en.dashTimer = 0;
+        }
+      } else {
+        en.x += en.dashDirX * en.speed * 3.2;
+        en.y += en.dashDirY * en.speed * 3.2;
+        en.dashTimer++;
+        if (en.dashTimer > 22) {
+          en.dashing = false; en.dashTimer = 0;
+          // 飛龍亞基爾's "gale" signature: chain into another dash right away
+          if (en.galeDashesLeft > 0) {
+            en.galeDashesLeft--;
+            en.charging = true;
+            en.chargeTimer = 10;
+            en.galeFollowup = true;
+          }
+        }
+      }
+      en.x = Math.max(0, Math.min(LEVEL_WIDTH - en.w, en.x));
+
+      if (en.attackCooldown > 0) en.attackCooldown--;
+      if (!en.charging && en.attackMode !== 'cast' && rectsOverlap(en, player) && en.attackCooldown<=0) {
+        damagePlayer(en.dmg);
+        en.attackCooldown = en.dashing ? 30 : 50;
+      }
+    }
+  }
+}
+
+function updateParticles() {
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy;
+    p.life--;
+  }
+  particles = particles.filter(p => p.life > 0);
+}
+
+// ---------- Drawing helpers ----------
+function drawBar(x, y, w, h, pct, colorFill, colorBg, label) {
+  ctx.fillStyle = colorBg;
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = colorFill;
+  ctx.fillRect(x, y, w * Math.max(0,pct), h);
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  if (label) {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x - 26, y + h/2);
+  }
+}
+
+function drawFlaskIcon(x, y, color, count, keyLabel) {
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  roundRect(ctx, x, y, 18, 20, 4);
+  ctx.fill();
+  const fillH = count > 0 ? 14 : 0;
+  ctx.fillStyle = count > 0 ? color : 'rgba(255,255,255,0.15)';
+  roundRect(ctx, x+2, y+18-fillH, 14, fillH, 3);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, x, y, 18, 20, 4);
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText(`x${count}`, x+24, y+15);
+  if (keyLabel) {
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '9px sans-serif';
+    ctx.fillText(keyLabel, x+2, y-3);
+  }
+}
+
+function drawHUD() {
+  // HP/FP bars grow in length as their upgrades raise the max, instead of staying a
+  // fixed size and just reporting a smaller fraction filled - stamina has no upgrade
+  // path so its bar stays put.
+  const hpBarW = 180 * (player.maxHp / 100);
+  const fpBarW = 180 * (player.maxFp / 100);
+  drawBar(56, 16, hpBarW, 16, player.hp/player.maxHp, '#e0453f', 'rgba(60,10,10,0.7)', 'HP');
+  drawBar(56, 38, fpBarW, 14, player.fp/player.maxFp, '#3f7fe0', 'rgba(10,20,60,0.7)', 'FP');
+  drawBar(56, 58, 180, 12, player.sta/player.maxSta, '#4fd15b', 'rgba(10,40,10,0.7)', '耐力');
+
+  // timer top-right, echoing the "1:00" in the drawing - the village has no timer
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'right';
+  if (isFinite(levelTimeLeft)) {
+    const secs = Math.max(0, Math.ceil(levelTimeLeft/60));
+    const mm = Math.floor(secs/60), ss = secs%60;
+    ctx.fillText(`${mm}:${ss.toString().padStart(2,'0')}`, W-24, 34);
+  }
+  ctx.font = 'bold 15px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣 ${player.gold}`, W-24, 58);
+  ctx.textAlign = 'left';
+
+  // weapon indicator
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('武器: ' + player.weapon.name, 56, 90);
+
+  // potion flasks, below the bars and clear of the top hint text: top = HP recovery, bottom = FP recovery
+  drawFlaskIcon(160, 78, '#ff6b5c', player.hpPotions, '1');
+  drawFlaskIcon(160, 104, '#5c9dff', player.fpPotions, '2');
+
+  if (currentLevelId === 'arena') {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff8a6a';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(`第 ${arenaWave} 波`, W/2, 34);
+    if (arenaBannerTimer > 0) {
+      ctx.globalAlpha = Math.min(1, arenaBannerTimer / 30);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 26px sans-serif';
+      ctx.fillText(arenaBanner, W/2, 90);
+      ctx.globalAlpha = 1;
+    }
+    ctx.textAlign = 'left';
+  }
+}
+
+// 草神狼's vine bind: a few thorny vines wrap the player's feet while rooted.
+function drawRootedEffect() {
+  ctx.save();
+  ctx.translate(player.x + player.w/2, player.y + player.h);
+  ctx.strokeStyle = '#3d7a2a';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 3; i++) {
+    const ox = (i - 1) * 12;
+    const sway = Math.sin(frame * 0.3 + i) * 3;
+    ctx.beginPath();
+    ctx.moveTo(ox, 0);
+    ctx.quadraticCurveTo(ox + sway, -10, ox, -20);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawWorldCompleteBanner() {
+  if (worldCompleteBanner <= 0) return;
+  const elapsed = 300 - worldCompleteBanner;
+  let alpha = 1;
+  if (elapsed < 20) alpha = elapsed / 20;
+  else if (worldCompleteBanner < 60) alpha = worldCompleteBanner / 60;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, H/2 - 70, W, 140);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd35c';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillText('🏆 四大魔王已全數討伐！', W/2, H/2 - 14);
+  ctx.fillStyle = '#fff';
+  ctx.font = '15px sans-serif';
+  ctx.fillText('第二個世界的大門正在成形...敬請期待', W/2, H/2 + 22);
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
+function drawDragon(p) {
+  ctx.save();
+  ctx.translate(p.x + p.w/2, p.y + p.h/2);
+  ctx.scale(p.facing, 1);
+  const bob = p.onGround ? Math.sin(p.walkCycle)*2 : 0;
+  ctx.translate(0, bob);
+
+  if (p.invuln > 0 && Math.floor(frame/4)%2===0) ctx.globalAlpha = 0.4;
+
+  // tail with a small spiked tip
+  ctx.fillStyle = '#379143';
+  ctx.beginPath();
+  ctx.moveTo(-p.w/2, 6);
+  ctx.quadraticCurveTo(-p.w/2-18, 11, -p.w/2-27, -2);
+  ctx.quadraticCurveTo(-p.w/2-12, 3, -p.w/2, -4);
+  ctx.fill();
+  ctx.fillStyle = '#e8d55a';
+  ctx.beginPath();
+  ctx.moveTo(-p.w/2-23, -3);
+  ctx.lineTo(-p.w/2-31, -7);
+  ctx.lineTo(-p.w/2-21, 3);
+  ctx.fill();
+
+  // body - subtle gradient so it reads with some volume instead of a flat fill
+  const bodyGrad = ctx.createLinearGradient(-p.w/2, -p.h/2, p.w/2, p.h/2);
+  bodyGrad.addColorStop(0, '#5fd66c');
+  bodyGrad.addColorStop(1, '#379143');
+  ctx.fillStyle = bodyGrad;
+  roundRect(ctx, -p.w/2+4, -p.h/2+14, p.w-8, p.h-22, 10);
+  ctx.fill();
+
+  // spine spikes
+  ctx.fillStyle = '#e8d55a';
+  for (const sx of [-p.w/2+7, -p.w/2+15, -p.w/2+23]) {
+    ctx.beginPath();
+    ctx.moveTo(sx-3, -p.h/2+16);
+    ctx.lineTo(sx+3, -p.h/2+16);
+    ctx.lineTo(sx, -p.h/2+7);
+    ctx.fill();
+  }
+
+  // belly
+  ctx.fillStyle = '#eaf7cf';
+  roundRect(ctx, -p.w/2+9, -p.h/2+22, p.w-20, p.h-32, 7);
+  ctx.fill();
+
+  // legs with small claws
+  ctx.fillStyle = '#379143';
+  const legSwing = p.onGround ? Math.sin(p.walkCycle)*6 : 0;
+  ctx.fillRect(-10, p.h/2-18+legSwing*0.2, 8, 16);
+  ctx.fillRect(4, p.h/2-18-legSwing*0.2, 8, 16);
+  ctx.fillStyle = '#e8d55a';
+  ctx.beginPath();
+  ctx.moveTo(-11, p.h/2-2+legSwing*0.2); ctx.lineTo(-5, p.h/2-2+legSwing*0.2); ctx.lineTo(-8, p.h/2+3+legSwing*0.2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(3, p.h/2-2-legSwing*0.2); ctx.lineTo(9, p.h/2-2-legSwing*0.2); ctx.lineTo(6, p.h/2+3-legSwing*0.2);
+  ctx.fill();
+
+  // small arm connecting shoulder to the weapon grip, plus a pauldron colored to the equipped weapon
+  ctx.fillStyle = '#379143';
+  roundRect(ctx, p.w/2-15, -3, 13, 6, 3);
+  ctx.fill();
+  ctx.fillStyle = p.weapon.color;
+  ctx.beginPath();
+  ctx.arc(p.w/2-17, -p.h/2+23, 6, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // head
+  ctx.fillStyle = '#4CC15A';
+  ctx.beginPath();
+  ctx.ellipse(p.w/2-14, -p.h/2+16, 15, 13, 0, 0, Math.PI*2);
+  ctx.fill();
+  // snout
+  roundRect(ctx, p.w/2-9, -p.h/2+11, 16, 10, 4);
+  ctx.fill();
+  // brow ridge for a sharper, more determined look
+  ctx.fillStyle = '#2f7a3a';
+  ctx.beginPath();
+  ctx.moveTo(p.w/2-20, -p.h/2+7);
+  ctx.lineTo(p.w/2-5, -p.h/2+5);
+  ctx.lineTo(p.w/2-7, -p.h/2+9);
+  ctx.lineTo(p.w/2-20, -p.h/2+10);
+  ctx.fill();
+  // swept-back horn
+  ctx.fillStyle = '#e8d55a';
+  ctx.beginPath();
+  ctx.moveTo(p.w/2-5, -p.h/2+4);
+  ctx.quadraticCurveTo(p.w/2+10, -p.h/2-4, p.w/2+9, -p.h/2-12);
+  ctx.quadraticCurveTo(p.w/2+2, -p.h/2-2, p.w/2-1, -p.h/2+5);
+  ctx.fill();
+  // eye with a highlight for some life in the expression
+  ctx.fillStyle = '#20321f';
+  ctx.beginPath();
+  ctx.arc(p.w/2-10, -p.h/2+15, 2.2, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(p.w/2-10.8, -p.h/2+14.2, 0.8, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.globalAlpha = 1;
+
+  // weapon (holstered while the shield is up)
+  if (p.blocking) {
+    drawShieldSprite(p);
+  } else {
+    drawWeaponSprite(p);
+  }
+
+  // whirl-slash sweep trail for the sword special
+  if (p.specialType === 'sword') {
+    const t = 1 - p.specialTimer / 26;
+    ctx.save();
+    ctx.globalAlpha = 0.55 * (1 - t);
+    ctx.strokeStyle = '#dfe8f0';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 34, 0, Math.PI * 2 * t);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+function drawShieldSprite(p) {
+  ctx.save();
+  ctx.translate(p.w/2 - 2, 2);
+  if (p.blockFlash > 0) {
+    ctx.save();
+    ctx.globalAlpha = p.blockFlash / 10;
+    ctx.strokeStyle = '#dff0ff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 18 + (10 - p.blockFlash), 0, Math.PI*2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  const shieldKey = p.shield.key;
+  if (shieldKey === 'greatshield') {
+    roundRect(ctx, -9, -22, 22, 44, 8);
+    ctx.fillStyle = '#5a5f68';
+    ctx.fill();
+    roundRect(ctx, -5, -16, 14, 32, 5);
+    ctx.fillStyle = '#8f97a3';
+    ctx.fill();
+    ctx.fillStyle = '#e8d55a';
+    ctx.beginPath();
+    ctx.arc(2, 0, 4, 0, Math.PI*2);
+    ctx.fill();
+  } else if (shieldKey === 'spikeshield') {
+    roundRect(ctx, -6, -16, 16, 32, 6);
+    ctx.fillStyle = '#7a4a3a';
+    ctx.fill();
+    roundRect(ctx, -3, -12, 10, 24, 4);
+    ctx.fillStyle = '#c9a24a';
+    ctx.fill();
+    ctx.fillStyle = '#e8e8ee';
+    for (const oy of [-10, 0, 10]) {
+      ctx.beginPath();
+      ctx.moveTo(-3, oy-3); ctx.lineTo(-9, oy); ctx.lineTo(-3, oy+3);
+      ctx.fill();
+    }
+  } else {
+    roundRect(ctx, -6, -16, 16, 32, 6);
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fill();
+    roundRect(ctx, -3, -12, 10, 24, 4);
+    ctx.fillStyle = '#c9d6e3';
+    ctx.fill();
+    ctx.fillStyle = '#e8d55a';
+    ctx.beginPath();
+    ctx.arc(2, 0, 3, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawWeaponSprite(p) {
+  const w = p.weapon;
+  if (w.key === 'hammer' && p.hammerThrow) return; // the hammer is drawn as a flying projectile elsewhere
+  if (w.key === 'greataxe' && p.skyAxe) return; // the axe is drawn flying up/down elsewhere
+
+  let angle = -0.4;
+  // the bow always points at wherever the player is aiming (mouse/touch), not just forward
+  const bowAimAngle = w.ranged ? Math.atan2(getAimVector().y * p.facing, getAimVector().x * p.facing) : null;
+  if (p.specialType === 'sword') {
+    const t = 1 - p.specialTimer / 26;
+    angle = t * Math.PI * 2.4; // fast full spin for the whirl slash
+  } else if (p.specialType === 'spear') {
+    const t = 1 - p.specialTimer / 44;
+    const cyc = (t * 5) % 1; // 5 quick thrust/retract cycles
+    angle = cyc < 0.4 ? -0.9 + (cyc/0.4) * 1.5 : 0.6 - ((cyc-0.4)/0.6) * 1.5;
+  } else if (p.specialType === 'dualdagger') {
+    angle = 0.2 + Math.sin(frame * 1.3) * 0.5; // rapid slashing flicker during the dash
+  } else if (p.specialType === 'whip') {
+    const t = 1 - p.specialTimer / 40;
+    const cyc = (t * 4) % 1; // 4 long cracking lashes
+    angle = cyc < 0.3 ? -0.7 + (cyc/0.3) * 1.9 : 1.2 - ((cyc-0.3)/0.7) * 1.9;
+  } else if (p.specialType === 'greatsword') {
+    const t = 1 - p.specialTimer / 34;
+    const cyc = (t * 2) % 1; // two big cross-pattern slashes
+    angle = -1.3 + cyc * 2.6;
+  } else if (p.specialType === 'trident') {
+    const t = 1 - p.specialTimer / 36;
+    const cyc = (t * 3) % 1; // three quick thrusts
+    angle = cyc < 0.4 ? -0.6 + (cyc/0.4) * 1.1 : 0.5 - ((cyc-0.4)/0.6) * 1.1;
+  } else if (p.specialType === 'katana') {
+    const t = 1 - p.specialTimer / 18;
+    angle = -1.4 + t * 2.5; // one fast decisive draw-cut
+  } else if (p.specialType === 'shortblade') {
+    angle = 0.3 + Math.sin(frame * 1.6) * 0.6; // frantic close-range flicker
+  } else if (p.specialType === 'bow') {
+    angle = bowAimAngle + Math.sin(frame * 0.7) * 0.06; // slight tremor while lining up the shot
+  } else if (p.specialType === 'flail') {
+    angle = (frame * 0.5) % (Math.PI * 2); // continuous overhead spin
+  } else if (p.specialType === 'scythe') {
+    const t = 1 - p.specialTimer / 30;
+    angle = -1.5 + t * 3.0; // one big wide sweep
+  } else if (w.ranged) {
+    angle = bowAimAngle; // always pointed at the aim direction outside of specials
+  } else if (p.attackWindup > 0) {
+    const t = 1 - p.attackWindup / w.windup;
+    angle = -0.9 + t * 1.6;
+  } else if (p.attacking) {
+    angle = 0.7;
+  }
+  ctx.save();
+  ctx.translate(p.w/2-6, -2);
+  ctx.rotate(angle);
+  if (w.key === 'sword') {
+    ctx.fillStyle = '#8a8f99';
+    ctx.fillRect(0, -2, 34, 4);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, -3, 8, 6);
+  } else if (w.key === 'hammer') {
+    ctx.fillStyle = '#7a5a3a';
+    ctx.fillRect(0, -2, 26, 4);
+    ctx.fillStyle = '#6b6f76';
+    ctx.fillRect(22, -9, 16, 18);
+  } else if (w.key === 'spear') {
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-4, -2, 46, 3);
+    ctx.fillStyle = '#c9d6e3';
+    ctx.beginPath();
+    ctx.moveTo(42, -6); ctx.lineTo(52, 0); ctx.lineTo(42, 6);
+    ctx.fill();
+  } else if (w.key === 'dualdagger') {
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(0, -2, 26, 4);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, -3, 8, 6);
+    ctx.save();
+    ctx.rotate(-0.6);
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(0, -2, 22, 4);
+    ctx.restore();
+  } else if (w.key === 'greataxe') {
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(0, -2, 30, 4);
+    ctx.fillStyle = '#5a6b7a';
+    ctx.beginPath();
+    ctx.moveTo(24, -16); ctx.quadraticCurveTo(48, -18, 44, 2);
+    ctx.quadraticCurveTo(48, 20, 24, 18);
+    ctx.quadraticCurveTo(30, 2, 24, -16);
+    ctx.fill();
+    ctx.strokeStyle = '#3a3a3a';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  } else if (w.key === 'whip') {
+    ctx.strokeStyle = '#8a4fd9';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    for (let i = 1; i <= 5; i++) {
+      const wig = Math.sin(frame * 0.4 + i * 0.8) * 3 * (i / 5);
+      ctx.lineTo(i * 12, wig);
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, -3, 8, 6);
+  } else if (w.key === 'greatsword') {
+    ctx.fillStyle = '#c9a24a';
+    ctx.fillRect(0, -3, 48, 6);
+    ctx.beginPath();
+    ctx.moveTo(48, -6); ctx.lineTo(58, 0); ctx.lineTo(48, 6);
+    ctx.fill();
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-14, -6, 16, 12);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-10, -3, 10, 6);
+  } else if (w.key === 'trident') {
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-4, -2, 48, 4);
+    ctx.fillStyle = '#4fb8c9';
+    for (const oy of [-8, 0, 8]) {
+      ctx.beginPath();
+      ctx.moveTo(40, oy-2); ctx.lineTo(54, oy); ctx.lineTo(40, oy+2);
+      ctx.fill();
+    }
+  } else if (w.key === 'katana') {
+    ctx.fillStyle = '#e8e8ee';
+    ctx.beginPath();
+    ctx.moveTo(0, -2); ctx.quadraticCurveTo(24, -6, 46, -2);
+    ctx.lineTo(46, 2); ctx.quadraticCurveTo(24, 0, 0, 2);
+    ctx.fill();
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(-8, -3, 10, 6);
+  } else if (w.key === 'shortblade') {
+    ctx.fillStyle = '#a9a9a9';
+    ctx.beginPath();
+    ctx.moveTo(0, -3); ctx.lineTo(22, 0); ctx.lineTo(0, 3);
+    ctx.fill();
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, -3, 8, 6);
+  } else if (w.key === 'bow') {
+    ctx.strokeStyle = '#8a6a3a';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 22, -1.1, 1.1);
+    ctx.stroke();
+    const drawBack = p.attackWindup > 0 ? (1 - p.attackWindup / w.windup) * 12 : (p.specialType === 'bow' ? 10 : 0);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(22*Math.cos(-1.1), 22*Math.sin(-1.1));
+    ctx.lineTo(-drawBack, 0);
+    ctx.lineTo(22*Math.cos(1.1), 22*Math.sin(1.1));
+    ctx.stroke();
+  } else if (w.key === 'flail') {
+    ctx.strokeStyle = '#8a6a3a';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(16, 0); ctx.stroke();
+    const swing = p.specialType === 'flail' ? Math.sin(frame*0.6)*0.8 : 0;
+    ctx.save();
+    ctx.translate(16, 0);
+    ctx.rotate(0.6 + swing);
+    ctx.strokeStyle = '#6a5a4a';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(18,4); ctx.stroke();
+    ctx.fillStyle = '#5a5f68';
+    ctx.beginPath(); ctx.arc(20, 5, 8, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  } else if (w.key === 'scythe') {
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(-4, -3, 44, 6);
+    ctx.fillStyle = '#8a1a2a';
+    ctx.beginPath();
+    ctx.moveTo(38, -4);
+    ctx.quadraticCurveTo(58, -14, 52, 6);
+    ctx.quadraticCurveTo(46, 2, 38, 4);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
+// Pulsing red ring + "!" mark used to telegraph an incoming enemy attack before it lands.
+function drawAttackTelegraph(cx, cy, radius) {
+  const pulse = 0.5 + 0.5 * Math.sin(frame * 0.9);
+  ctx.save();
+  ctx.globalAlpha = 0.35 + 0.4 * pulse;
+  ctx.strokeStyle = '#ff3b30';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius + pulse * 5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = '#ff3b30';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('!', cx, cy - radius - 10);
+  ctx.textAlign = 'left';
+}
+
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.slice(1), 16);
+  let r = Math.max(0, Math.min(255, (num >> 16) + Math.round(2.55*percent)));
+  let g = Math.max(0, Math.min(255, ((num >> 8) & 0xff) + Math.round(2.55*percent)));
+  let b = Math.max(0, Math.min(255, (num & 0xff) + Math.round(2.55*percent)));
+  return `rgb(${r},${g},${b})`;
+}
+
+// Bosses get their own bigger, more elaborate silhouette instead of a scaled-up mob:
+// a four-legged horned beast for ground bosses, a winged horned dragon for flying ones,
+// plus a pulsing dark aura underneath to read as unmistakably "boss" at a glance.
+function drawBossCreature(en) {
+  if (en.exploding) {
+    const warnPct = en.explodeTimer / 30;
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, 14 + (1-warnPct) * (en.explodeRadius || 130));
+  } else if (en.telegraph || en.charging) {
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, en.burst ? 56 : 40);
+  }
+
+  const pulse = 0.5 + 0.5 * Math.sin(frame * 0.07);
+  ctx.save();
+  ctx.globalAlpha = 0.28 + 0.14 * pulse;
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.ellipse(en.x + en.w/2, en.y + en.h + 4, en.w*0.62, 12, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(en.x, en.y);
+  if (en.hitFlash > 0) ctx.filter = 'brightness(1.8)';
+  // The beast/dragon art is drawn head-to-the-right by construction; mirror it
+  // when facing left so the boss's head (not its tail) points at the player.
+  if (en.dir < 0) {
+    ctx.translate(en.w, 0);
+    ctx.scale(-1, 1);
+  }
+  if (en.name === '熔岩土龍') drawLavaTitanBoss(en);
+  else if (en.type === 'bomb') drawBossBeast(en);
+  else drawBossDragon(en);
+  ctx.restore();
+
+  drawEnemyHp(en);
+}
+
+function drawBossBeast(en) {
+  const cx = en.w/2, cy = en.h*0.58;
+  const bodyW = en.w*0.62, bodyH = en.h*0.5;
+
+  // tail with a spiked tip
+  ctx.fillStyle = shadeColor(en.colorMain, -15);
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyW*0.9, cy);
+  ctx.quadraticCurveTo(cx - en.w*0.55, cy - en.h*0.15, cx - en.w*0.48, cy - en.h*0.42);
+  ctx.quadraticCurveTo(cx - en.w*0.42, cy - en.h*0.1, cx - bodyW*0.7, cy + bodyH*0.2);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.5, cy - en.h*0.38);
+  ctx.lineTo(cx - en.w*0.6, cy - en.h*0.52);
+  ctx.lineTo(cx - en.w*0.44, cy - en.h*0.3);
+  ctx.fill();
+
+  // back legs (behind the body)
+  ctx.fillStyle = shadeColor(en.colorMain, -25);
+  roundRect(ctx, cx - bodyW*0.55, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+  roundRect(ctx, cx + bodyW*0.35, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+
+  // body
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 2;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.stroke();
+
+  // front legs with claws (in front of the body)
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, cx - bodyW*0.85, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  roundRect(ctx, cx + bodyW*0.55, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  for (const lx of [cx - bodyW*0.85, cx + bodyW*0.55]) {
+    ctx.beginPath();
+    ctx.moveTo(lx-2, en.h*1.02); ctx.lineTo(lx+en.w*0.16+2, en.h*1.02); ctx.lineTo(lx+en.w*0.08, en.h*1.1);
+    ctx.fill();
+  }
+
+  // spine spikes
+  ctx.fillStyle = en.colorAccent;
+  for (let i = 0; i < 5; i++) {
+    const sx = cx - bodyW*0.7 + i*(bodyW*1.4/4);
+    const sh = bodyH*0.5 * (1 - Math.abs(i-2)/3);
+    ctx.beginPath();
+    ctx.moveTo(sx-6, cy-bodyH*0.85);
+    ctx.lineTo(sx+6, cy-bodyH*0.85);
+    ctx.lineTo(sx, cy-bodyH*0.85-sh-10);
+    ctx.fill();
+  }
+
+  // head with horns and glowing eyes
+  const hx = cx + bodyW*0.9, hy = cy - bodyH*0.55;
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, en.w*0.24, en.h*0.2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, 8);
+  roundRect(ctx, hx + en.w*0.1, hy - en.h*0.06, en.w*0.22, en.h*0.16, 6);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(hx - en.w*0.05, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.02, hy - en.h*0.42);
+  ctx.lineTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.2, hy - en.h*0.4);
+  ctx.lineTo(hx + en.w*0.24, hy - en.h*0.14);
+  ctx.fill();
+  const eyeGlow = en.telegraph ? (0.6 + 0.4*Math.sin(frame*0.8)) : 1;
+  ctx.globalAlpha = eyeGlow;
+  ctx.beginPath(); ctx.arc(hx+en.w*0.05, hy-en.h*0.02, 3.4, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = shadeColor(en.colorMain, -40);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(hx + en.w*0.1, hy + en.h*0.08);
+  ctx.lineTo(hx + en.w*0.3, hy + en.h*0.1);
+  ctx.stroke();
+}
+
+// 熔岩土龍's own silhouette, built off a reference of a hunched, rock-scaled dragon
+// with folded bat wings and lava dripping from its jaw and one melting foreleg -
+// distinct from the shared drawBossBeast used by the other ground-type boss.
+function drawLavaTitanBoss(en) {
+  const cx = en.w/2, cy = en.h*0.58;
+  const bodyW = en.w*0.62, bodyH = en.h*0.5;
+
+  // tail with a spiked tip
+  ctx.fillStyle = shadeColor(en.colorMain, -15);
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyW*0.9, cy);
+  ctx.quadraticCurveTo(cx - en.w*0.55, cy - en.h*0.15, cx - en.w*0.48, cy - en.h*0.42);
+  ctx.quadraticCurveTo(cx - en.w*0.42, cy - en.h*0.1, cx - bodyW*0.7, cy + bodyH*0.2);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.5, cy - en.h*0.38);
+  ctx.lineTo(cx - en.w*0.6, cy - en.h*0.52);
+  ctx.lineTo(cx - en.w*0.44, cy - en.h*0.3);
+  ctx.fill();
+
+  // back legs (behind the body)
+  ctx.fillStyle = shadeColor(en.colorMain, -25);
+  roundRect(ctx, cx - bodyW*0.55, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+  roundRect(ctx, cx + bodyW*0.35, en.h*0.72, en.w*0.14, en.h*0.3, 4); ctx.fill();
+
+  // hunched, craggy body
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 2;
+  roundRect(ctx, cx - bodyW, cy - bodyH, bodyW*2, bodyH*1.5, bodyH*0.5);
+  ctx.stroke();
+
+  // folded bat wings, layered over the back with visible rib lines
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.translate(cx + side*bodyW*0.42, cy - bodyH*0.45);
+    ctx.scale(side, 1);
+    ctx.beginPath();
+    ctx.moveTo(-en.w*0.05, en.h*0.32);
+    ctx.lineTo(en.w*0.22, -en.h*0.42);
+    ctx.lineTo(en.w*0.12, -en.h*0.08);
+    ctx.lineTo(en.w*0.22, en.h*0.1);
+    ctx.lineTo(en.w*0.08, en.h*0.2);
+    ctx.lineTo(en.w*0.14, en.h*0.36);
+    ctx.closePath();
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = shadeColor(en.colorMain, -32);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = shadeColor(en.colorMain, -55);
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-en.w*0.02, en.h*0.28);
+    ctx.lineTo(en.w*0.2, -en.h*0.36);
+    ctx.moveTo(0, en.h*0.14);
+    ctx.lineTo(en.w*0.18, -en.h*0.04);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // dense rocky scutes across the back, denser than a normal spine ridge
+  ctx.fillStyle = shadeColor(en.colorMain, -18);
+  for (let i = 0; i < 9; i++) {
+    const sx = cx - bodyW*0.85 + i * (bodyW*1.7/8);
+    const sh = bodyH*0.28 + bodyH*0.22 * Math.abs(Math.sin(i*2.3));
+    ctx.beginPath();
+    ctx.moveTo(sx-5, cy-bodyH*0.85);
+    ctx.lineTo(sx+5, cy-bodyH*0.85);
+    ctx.lineTo(sx, cy-bodyH*0.85-sh-8);
+    ctx.fill();
+  }
+
+  // front legs - the forward one is half-melted, glowing and dripping lava
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, cx - bodyW*0.85, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  const moltenPulse = 0.7 + 0.3 * Math.sin(frame*0.15);
+  ctx.save();
+  ctx.globalAlpha = moltenPulse;
+  ctx.fillStyle = en.colorAccent;
+  roundRect(ctx, cx + bodyW*0.55, en.h*0.68, en.w*0.16, en.h*0.34, 4); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, cx - bodyW*0.85, en.h*0.68, en.w*0.16, en.h*0.12, 4); ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(cx-bodyW*0.85-2, en.h*1.02); ctx.lineTo(cx-bodyW*0.85+en.w*0.16+2, en.h*1.02); ctx.lineTo(cx-bodyW*0.85+en.w*0.08, en.h*1.1);
+  ctx.fill();
+  // lava drips off the molten claw
+  for (const dx of [0, 7, 14]) {
+    const dripLen = 5 + 4 * Math.sin(frame*0.1 + dx);
+    ctx.beginPath();
+    ctx.moveTo(cx + bodyW*0.55 + dx, en.h*1.02 + 2);
+    ctx.lineTo(cx + bodyW*0.55 + dx + 3, en.h*1.02 + 2 + dripLen);
+    ctx.lineTo(cx + bodyW*0.55 + dx - 3, en.h*1.02 + 2 + dripLen);
+    ctx.fill();
+  }
+
+  // head with craggy brow, horns, glowing eye, and a molten lower jaw -
+  // kept close to the body with a snout bridge so it reads as one connected beast
+  const hx = cx + bodyW*0.78, hy = cy - bodyH*0.5;
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, en.w*0.24, en.h*0.2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  roundRect(ctx, hx + en.w*0.08, hy - en.h*0.05, en.w*0.16, en.h*0.14, 5);
+  ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, -18);
+  for (let i = 0; i < 3; i++) {
+    const bx = hx - en.w*0.1 + i * en.w*0.08;
+    ctx.beginPath();
+    ctx.moveTo(bx-4, hy-en.h*0.16); ctx.lineTo(bx+4, hy-en.h*0.16); ctx.lineTo(bx, hy-en.h*0.28);
+    ctx.fill();
+  }
+  // glowing molten lower jaw, bridging out from the snout like dripping magma
+  const jawGlow = 0.75 + 0.25 * Math.sin(frame*0.2);
+  ctx.save();
+  ctx.globalAlpha = jawGlow;
+  ctx.fillStyle = en.colorAccent;
+  roundRect(ctx, hx + en.w*0.05, hy + en.h*0.05, en.w*0.18, en.h*0.11, 5);
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = en.colorAccent;
+  for (const dx of [0, 6, 12]) {
+    const dripLen = 3 + 3 * Math.sin(frame*0.13 + dx);
+    ctx.beginPath();
+    ctx.moveTo(hx+en.w*0.06+dx, hy+en.h*0.16);
+    ctx.lineTo(hx+en.w*0.06+dx+2, hy+en.h*0.16+dripLen);
+    ctx.lineTo(hx+en.w*0.06+dx-2, hy+en.h*0.16+dripLen);
+    ctx.fill();
+  }
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(hx - en.w*0.05, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.02, hy - en.h*0.42);
+  ctx.lineTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx + en.w*0.1, hy - en.h*0.16);
+  ctx.lineTo(hx + en.w*0.2, hy - en.h*0.4);
+  ctx.lineTo(hx + en.w*0.24, hy - en.h*0.14);
+  ctx.fill();
+  const eyeGlow = en.telegraph ? (0.6 + 0.4*Math.sin(frame*0.8)) : 1;
+  ctx.globalAlpha = eyeGlow;
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath(); ctx.arc(hx+en.w*0.02, hy-en.h*0.08, 3.4, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawBossDragon(en) {
+  const cx = en.w/2, cy = en.h/2;
+  const flap = Math.sin(frame*0.15) * 0.5;
+
+  // tail
+  ctx.fillStyle = shadeColor(en.colorMain, -15);
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.4, cy);
+  ctx.quadraticCurveTo(cx - en.w*0.75, cy + en.h*0.1, cx - en.w*0.95, cy - en.h*0.15);
+  ctx.quadraticCurveTo(cx - en.w*0.7, cy + en.h*0.05, cx - en.w*0.35, cy + en.h*0.15);
+  ctx.fill();
+
+  // wings (behind the body, flapping)
+  ctx.fillStyle = shadeColor(en.colorMain, -20);
+  ctx.save();
+  ctx.translate(cx - en.w*0.1, cy);
+  ctx.rotate(-0.5 - flap);
+  ctx.beginPath();
+  ctx.moveTo(0,0); ctx.lineTo(-en.w*0.55, -en.h*0.35); ctx.lineTo(-en.w*0.5, en.h*0.05); ctx.lineTo(-en.w*0.2, en.h*0.15);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.translate(cx - en.w*0.1, cy);
+  ctx.rotate(0.5 + flap);
+  ctx.beginPath();
+  ctx.moveTo(0,0); ctx.lineTo(-en.w*0.55, en.h*0.35); ctx.lineTo(-en.w*0.5, -en.h*0.05); ctx.lineTo(-en.w*0.2, -en.h*0.15);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // body + lighter belly
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx-en.w*0.42, cy-en.h*0.34, en.w*0.75, en.h*0.68, en.h*0.3);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 2;
+  roundRect(ctx, cx-en.w*0.42, cy-en.h*0.34, en.w*0.75, en.h*0.68, en.h*0.3);
+  ctx.stroke();
+  ctx.fillStyle = shadeColor(en.colorMain, 20);
+  roundRect(ctx, cx-en.w*0.3, cy-en.h*0.05, en.w*0.5, en.h*0.32, en.h*0.14);
+  ctx.fill();
+
+  // head with horns and glowing eyes
+  const hx = cx + en.w*0.42, hy = cy - en.h*0.1;
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, en.w*0.2, en.h*0.22, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.moveTo(hx-en.w*0.06, hy-en.h*0.18); ctx.lineTo(hx-en.w*0.02, hy-en.h*0.42); ctx.lineTo(hx+en.w*0.06, hy-en.h*0.18);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(hx+en.w*0.08, hy-en.h*0.18); ctx.lineTo(hx+en.w*0.14, hy-en.h*0.4); ctx.lineTo(hx+en.w*0.2, hy-en.h*0.16);
+  ctx.fill();
+  const eyeGlow = en.charging ? (0.6 + 0.4*Math.sin(frame*0.8)) : 1;
+  ctx.globalAlpha = eyeGlow;
+  ctx.beginPath(); ctx.arc(hx+en.w*0.06, hy-en.h*0.02, 3.2, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = shadeColor(en.colorMain, 6);
+  roundRect(ctx, hx+en.w*0.14, hy-en.h*0.06, en.w*0.16, en.h*0.14, 4);
+  ctx.fill();
+}
+
+function drawBuriedMound(en) {
+  ctx.save();
+  ctx.translate(en.x, en.y);
+  const cx = en.w/2, cy = en.h;
+  ctx.fillStyle = 'rgba(30,20,10,0.5)';
+  ctx.beginPath(); ctx.ellipse(cx, cy, en.w*0.5, 6, 0, 0, Math.PI*2); ctx.fill();
+  // a couple of leaf tips poking out of the dirt, swaying gently until it's triggered
+  ctx.strokeStyle = en.colorAccent;
+  ctx.lineWidth = 2;
+  const sway = Math.sin(frame*0.08) * 2;
+  ctx.beginPath();
+  ctx.moveTo(cx-5, cy); ctx.quadraticCurveTo(cx-5+sway, cy-10, cx-3, cy-15);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx+5, cy); ctx.quadraticCurveTo(cx+5-sway, cy-8, cx+7, cy-13);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Molten, legless blob body for the 'lava' kind: a wobbling amorphous outline with
+// glowing cracks instead of the generic robot's rigid limbs.
+function drawLavaBlobBody(en, maxWindup) {
+  const cx = en.w/2, cy = en.h/2 + en.h*0.14;
+  const baseR = en.w/2 - 2;
+
+  ctx.beginPath();
+  const pts = 10;
+  for (let i = 0; i <= pts; i++) {
+    const ang = (Math.PI*2*i)/pts;
+    const wob = Math.sin(frame*0.12 + i*1.7) * baseR*0.15;
+    const flatten = Math.max(0, Math.sin(ang)) * baseR*0.18;
+    const r = baseR + wob - flatten;
+    const px = cx + Math.cos(ang)*r, py = cy + Math.sin(ang)*r*0.92;
+    if (i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = en.colorMain;
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -30);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // glowing molten cracks
+  ctx.strokeStyle = en.colorAccent;
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.7 + 0.3*Math.sin(frame*0.2);
+  for (const [ox,oy,l] of [[-8,-3,10],[6,-7,9],[-1,5,8]]) {
+    ctx.beginPath();
+    ctx.moveTo(cx+ox, cy+oy);
+    ctx.lineTo(cx+ox+l*0.4, cy+oy+l*0.6);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // small drips along the base
+  ctx.fillStyle = en.colorAccent;
+  for (const dx of [-baseR*0.5, 0, baseR*0.5]) {
+    const drip = 2.5 + Math.max(0, Math.sin(frame*0.1 + dx));
+    ctx.beginPath();
+    ctx.ellipse(cx+dx, cy+baseR*0.8, 3, drip, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // glowing eyes
+  ctx.fillStyle = '#fff6d0';
+  ctx.beginPath(); ctx.arc(cx-6, cy-4, 3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6, cy-4, 3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#3a1408';
+  ctx.beginPath(); ctx.arc(cx-6+en.dir, cy-4, 1.3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6+en.dir, cy-4, 1.3, 0, Math.PI*2); ctx.fill();
+
+  // a glob rears up on the throwing side during the windup telegraph
+  if (en.telegraph) {
+    const t = 1 - en.attackWindup / maxWindup;
+    ctx.fillStyle = en.colorAccent;
+    ctx.beginPath();
+    ctx.arc(cx + en.dir*baseR*0.7, cy - baseR*0.6 - t*14, 5, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+// Crab body for the 'shell' kind: wide flat body, a shell dome layered on top, scuttling
+// legs, and a pair of pincers (one raised during the windup telegraph).
+function drawCrabBodyShape(en, maxWindup) {
+  const cx = en.w/2, cy = en.h/2 + en.h*0.16;
+  const bx = en.w*0.42, by = en.h*0.3;
+
+  // scuttling legs
+  ctx.strokeStyle = shadeColor(en.colorMain, -30);
+  ctx.lineWidth = 2.5;
+  for (let i = 0; i < 3; i++) {
+    const legPhase = Math.sin(frame*0.25 + i) * 3;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + side*bx*0.7, cy + by*0.3);
+      ctx.lineTo(cx + side*(bx*1.1 + i*4), cy + by*0.85 + legPhase);
+      ctx.stroke();
+    }
+  }
+
+  // the "extra" shell dome sitting on top of the crab's body
+  ctx.fillStyle = shadeColor(en.colorMain, -12);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - by*0.5, bx*0.85, by*0.75, 0, Math.PI, 0);
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - by*0.5, bx*0.85, by*0.75, 0, Math.PI, 0);
+  ctx.stroke();
+
+  // body
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath(); ctx.ellipse(cx, cy, bx, by, 0, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -35);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(cx, cy, bx, by, 0, 0, Math.PI*2); ctx.stroke();
+
+  // pincers - the one on the attacking side winds up before the hit
+  for (const side of [-1, 1]) {
+    const isAttackSide = side === en.dir;
+    ctx.save();
+    ctx.translate(cx + side*bx*0.95, cy - by*0.05);
+    let angle = side * 0.45;
+    if (en.telegraph && isAttackSide) {
+      const t = 1 - en.attackWindup / maxWindup;
+      angle = side * (0.45 - t * 1.7);
+    }
+    ctx.rotate(angle);
+    ctx.fillStyle = en.colorAccent;
+    ctx.beginPath();
+    ctx.moveTo(0, -5); ctx.lineTo(side*15, -5); ctx.lineTo(side*15, 5); ctx.lineTo(0, 5);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(side*13, -6); ctx.lineTo(side*21, -3); ctx.lineTo(side*13, 1);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(side*13, 6); ctx.lineTo(side*21, 3); ctx.lineTo(side*13, -1);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // eyes on stalks poking above the shell
+  ctx.strokeStyle = shadeColor(en.colorMain, -20);
+  ctx.lineWidth = 2;
+  for (const ox of [-6, 6]) {
+    ctx.beginPath();
+    ctx.moveTo(cx+ox, cy - by*0.8); ctx.lineTo(cx+ox, cy - by*1.3);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(cx-6, cy-by*1.35, 3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6, cy-by*1.35, 3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath(); ctx.arc(cx-6, cy-by*1.35, 1.3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+6, cy-by*1.35, 1.3, 0, Math.PI*2); ctx.fill();
+}
+
+function drawBombBot(en) {
+  if (en.buried && !en.emerging) { drawBuriedMound(en); return; }
+
+  const maxWindup = en.burst ? 50 : 30;
+  if (en.exploding) {
+    const warnPct = en.explodeTimer / 30;
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, 14 + (1-warnPct) * (en.explodeRadius || 76));
+  } else if (en.telegraph) {
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, en.isBoss ? 34 : 22);
+  }
+  ctx.save();
+  ctx.translate(en.x, en.y);
+  if (en.emerging) {
+    ctx.fillStyle = 'rgba(30,20,10,0.5)';
+    ctx.beginPath(); ctx.ellipse(en.w/2, en.h, en.w*0.5, 6, 0, 0, Math.PI*2); ctx.fill();
+    const revealed = Math.max(3, (1 - en.emergeTimer / en.emergeDuration) * en.h);
+    ctx.beginPath();
+    ctx.rect(0, en.h - revealed, en.w, revealed);
+    ctx.clip();
+  }
+  if (en.hitFlash > 0) ctx.filter = 'brightness(2)';
+
+  if (en.kind === 'lava') { drawLavaBlobBody(en, maxWindup); ctx.restore(); drawEnemyHp(en); return; }
+  if (en.kind === 'shell') { drawCrabBodyShape(en, maxWindup); ctx.restore(); drawEnemyHp(en); return; }
+
+  const bodyR = en.w/2 - 2;
+  const cx = en.w/2, cy = en.h/2 + en.h*0.1;
+
+  // legs
+  ctx.fillStyle = shadeColor(en.colorMain, -30);
+  roundRect(ctx, cx-en.w*0.29, en.h-8, en.w*0.18, 12, 2); ctx.fill();
+  roundRect(ctx, cx+en.w*0.11, en.h-8, en.w*0.18, 12, 2); ctx.fill();
+  ctx.fillStyle = shadeColor(en.colorMain, -50);
+  roundRect(ctx, cx-en.w*0.34, en.h+1, en.w*0.26, 4, 2); ctx.fill();
+  roundRect(ctx, cx+en.w*0.08, en.h+1, en.w*0.26, 4, 2); ctx.fill();
+
+  // resting arm, tucked mostly behind the round torso on the side opposite the attack
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, cx + (-en.dir)*bodyR*0.7 - 4, en.h/2-2, 8, 13, 3); ctx.fill();
+
+  // body
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath(); ctx.arc(cx, cy, bodyR, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -40);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, bodyR, 0, Math.PI*2); ctx.stroke();
+
+  // attacking arm - winds up and back before releasing
+  ctx.save();
+  ctx.translate(cx + en.dir*bodyR*0.6, en.h/2+2);
+  let armAngle = en.dir * 0.5;
+  if (en.telegraph) {
+    const t = 1 - en.attackWindup / maxWindup;
+    armAngle = en.dir * (0.5 - t * 2.1);
+  }
+  ctx.rotate(armAngle);
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, -4, 0, 8, 15, 3);
+  ctx.fill();
+  if (en.telegraph && en.attackMode !== 'melee') {
+    ctx.fillStyle = shadeColor(en.colorMain, -50);
+    ctx.beginPath(); ctx.arc(0, 17, 5, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+
+  // face: the classic cross-bolt for the bomb-bot kind, simple monster eyes for everything else
+  if (en.kind === 'bomb') {
+    ctx.strokeStyle = en.colorAccent;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx-8, cy-6); ctx.lineTo(cx+8, cy+6);
+    ctx.moveTo(cx+8, cy-6); ctx.lineTo(cx-8, cy+6);
+    ctx.stroke();
+    ctx.strokeStyle = '#c9a24a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy-bodyR);
+    ctx.quadraticCurveTo(cx+6, cy-bodyR-9, cx+2, cy-bodyR-13);
+    ctx.stroke();
+    ctx.fillStyle = frame%10<5 ? '#ff5a3c' : '#ffcf4a';
+    ctx.beginPath(); ctx.arc(cx+2, cy-bodyR-14, 3, 0, Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillStyle = en.colorAccent;
+    ctx.beginPath(); ctx.arc(cx-6, cy-4, 3.4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx+6, cy-4, 3.4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath(); ctx.arc(cx-6, cy-4, 1.4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx+6, cy-4, 1.4, 0, Math.PI*2); ctx.fill();
+    if (en.kind === 'vine' || en.kind === 'lurkvine') {
+      ctx.fillStyle = shadeColor(en.colorMain, -20);
+      for (const ox of [-8, 0, 8]) {
+        ctx.beginPath();
+        ctx.moveTo(cx+ox-3, cy-bodyR+4); ctx.lineTo(cx+ox+3, cy-bodyR+4); ctx.lineTo(cx+ox, cy-bodyR-6);
+        ctx.fill();
+      }
+    } else if (en.kind === 'wolf') {
+      ctx.fillStyle = shadeColor(en.colorMain, -15);
+      ctx.beginPath();
+      ctx.moveTo(cx-bodyR*0.6, cy-bodyR*0.7); ctx.lineTo(cx-bodyR*0.9, cy-bodyR*1.3); ctx.lineTo(cx-bodyR*0.3, cy-bodyR*0.9);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(cx+bodyR*0.6, cy-bodyR*0.7); ctx.lineTo(cx+bodyR*0.9, cy-bodyR*1.3); ctx.lineTo(cx+bodyR*0.3, cy-bodyR*0.9);
+      ctx.fill();
+    }
+  }
+
+  // treads/base
+  ctx.fillStyle = shadeColor(en.colorMain, -35);
+  ctx.fillRect(2, en.h-6, en.w-4, 6);
+  ctx.restore();
+
+  drawEnemyHp(en);
+}
+
+// Humanoid robed caster for the 'mage' kind: hooded silhouette hovering instead of the
+// generic drone box, holding a staff that glows brighter as its cast telegraph builds.
+function drawMageBody(en) {
+  const cx = en.w/2, cy = en.h/2;
+  const bob = Math.sin(en.phase) * 2;
+
+  // flowing robe
+  ctx.fillStyle = en.colorMain;
+  ctx.beginPath();
+  ctx.moveTo(cx - en.w*0.22, cy - en.h*0.15 + bob);
+  ctx.lineTo(cx + en.w*0.22, cy - en.h*0.15 + bob);
+  ctx.quadraticCurveTo(cx + en.w*0.34, cy + en.h*0.55 + bob, cx + en.w*0.16, cy + en.h*0.62 + bob);
+  ctx.lineTo(cx - en.w*0.16, cy + en.h*0.62 + bob);
+  ctx.quadraticCurveTo(cx - en.w*0.34, cy + en.h*0.55 + bob, cx - en.w*0.22, cy - en.h*0.15 + bob);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -30);
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // hood and dark face void with glowing eyes
+  ctx.fillStyle = shadeColor(en.colorMain, -10);
+  ctx.beginPath();
+  ctx.arc(cx, cy - en.h*0.28 + bob, en.w*0.2, Math.PI, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#1a1424';
+  ctx.beginPath();
+  ctx.arc(cx, cy - en.h*0.2 + bob, en.w*0.15, 0, Math.PI*2);
+  ctx.fill();
+  ctx.globalAlpha = en.charging ? (0.6 + 0.4*Math.sin(frame*0.8)) : 0.9;
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath(); ctx.arc(cx-4, cy-en.h*0.2+bob, 2, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+4, cy-en.h*0.2+bob, 2, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // staff, raised on the attacking side, orb glowing brighter mid-cast
+  ctx.save();
+  ctx.translate(cx + en.dir*en.w*0.3, cy + bob);
+  let staffAngle = en.dir * 0.15;
+  if (en.charging) staffAngle = en.dir * (0.15 - (1 - en.chargeTimer/20) * 0.5);
+  ctx.rotate(staffAngle);
+  ctx.strokeStyle = '#6a5030';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0, -en.h*0.35); ctx.lineTo(0, en.h*0.35); ctx.stroke();
+  ctx.fillStyle = en.colorAccent;
+  ctx.globalAlpha = en.charging ? (0.7 + 0.3*Math.sin(frame*0.9)) : 0.85;
+  ctx.beginPath(); ctx.arc(0, -en.h*0.38, en.charging ? 6 : 4, 0, Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// Sleek swallow silhouette for the 'bird' kind: pointed body, swept wings that flutter
+// much faster than the other flyers, and a forked tail trailing the direction of travel.
+function drawSwallowBody(en) {
+  const cx = en.w/2, cy = en.h/2;
+  const flap = Math.sin(frame*0.6) * 0.7;
+
+  // forked tail trailing behind
+  ctx.fillStyle = en.colorMain;
+  ctx.save();
+  ctx.translate(cx - en.dir*en.w*0.42, cy);
+  ctx.beginPath();
+  ctx.moveTo(0,0); ctx.lineTo(-en.dir*14,-7); ctx.lineTo(-en.dir*6,0); ctx.lineTo(-en.dir*14,7);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // sleek pointed body
+  ctx.beginPath();
+  ctx.moveTo(cx + en.dir*en.w*0.55, cy);
+  ctx.quadraticCurveTo(cx, cy - en.h*0.5, cx - en.dir*en.w*0.4, cy - en.h*0.1);
+  ctx.quadraticCurveTo(cx, cy + en.h*0.5, cx + en.dir*en.w*0.55, cy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = shadeColor(en.colorMain, -25);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // fast-flapping swept-back wings
+  ctx.fillStyle = en.colorAccent;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(-0.5 - flap);
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-en.w*0.6,-en.h*0.3); ctx.lineTo(-en.w*0.45, en.h*0.15); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(0.5 + flap);
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-en.w*0.6, en.h*0.3); ctx.lineTo(-en.w*0.45, -en.h*0.15); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // pale belly patch + beak
+  ctx.beginPath();
+  ctx.ellipse(cx - en.dir*en.w*0.05, cy + en.h*0.1, en.w*0.18, en.h*0.2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#f0b23a';
+  ctx.beginPath();
+  ctx.moveTo(cx + en.dir*en.w*0.5, cy-2); ctx.lineTo(cx + en.dir*en.w*0.62, cy); ctx.lineTo(cx + en.dir*en.w*0.5, cy+2);
+  ctx.fill();
+}
+
+function drawDrone(en) {
+  if (en.charging) {
+    drawAttackTelegraph(en.x + en.w/2, en.y + en.h/2, en.isBoss ? 30 : 20);
+  }
+  ctx.save();
+  ctx.translate(en.x, en.y);
+  if (en.hitFlash > 0) ctx.filter = 'brightness(2)';
+  if (en.charging) ctx.filter = 'brightness(1.6) saturate(1.4)';
+
+  if (en.kind === 'mage') { drawMageBody(en); ctx.restore(); drawEnemyHp(en); return; }
+  if (en.kind === 'bird') { drawSwallowBody(en); ctx.restore(); drawEnemyHp(en); return; }
+
+  ctx.fillStyle = en.colorMain;
+  roundRect(ctx, 4, 4, en.w-8, en.h-10, 4);
+  ctx.fill();
+  ctx.fillStyle = en.colorAccent;
+  ctx.beginPath();
+  ctx.arc(en.w/2, en.h/2, 3, 0, Math.PI*2);
+  ctx.fill();
+
+  if (en.kind === 'tentacle') {
+    ctx.strokeStyle = en.colorMain;
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 4; i++) {
+      const tx = 6 + i*(en.w-12)/3;
+      const wig = Math.sin(frame*0.15 + i) * 4;
+      ctx.beginPath();
+      ctx.moveTo(tx, en.h-6);
+      ctx.quadraticCurveTo(tx+wig, en.h+6, tx+wig*0.6, en.h+14);
+      ctx.stroke();
+    }
+  } else if (en.kind === 'owl' || en.kind === 'dragon') {
+    const flap = Math.sin(frame*0.3) * 0.6;
+    ctx.fillStyle = en.colorAccent;
+    ctx.save(); ctx.translate(2, en.h/2); ctx.rotate(-0.3 - flap);
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-14,-4); ctx.lineTo(-10,6); ctx.fill();
+    ctx.restore();
+    ctx.save(); ctx.translate(en.w-2, en.h/2); ctx.rotate(0.3 + flap);
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(14,-4); ctx.lineTo(10,6); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 4, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#3a2a1a';
+    ctx.beginPath(); ctx.arc(en.w/2-6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(en.w/2+6, en.h/2-2, 2, 0, Math.PI*2); ctx.fill();
+  } else {
+    ctx.strokeStyle = shadeColor(en.colorMain, -40);
+    ctx.lineWidth = 2;
+    const spin = (frame*0.9) % (Math.PI*2);
+    [[0,0],[en.w,0],[0,en.h-6],[en.w,en.h-6]].forEach(([ax,ay])=>{
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(spin);
+      ctx.beginPath();
+      ctx.moveTo(-6,0); ctx.lineTo(6,0);
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+  ctx.restore();
+
+  drawEnemyHp(en);
+}
+
+function drawEnemyHp(en) {
+  const bw = en.w;
+  if (en.isBoss && en.name) {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(en.name, en.x + en.w/2, en.y - 16);
+    ctx.textAlign = 'left';
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(en.x, en.y-10, bw, 5);
+  ctx.fillStyle = '#e0453f';
+  ctx.fillRect(en.x, en.y-10, bw * Math.max(0,en.hp/en.maxHp), 5);
+}
+
+function drawPlatform(p) {
+  ctx.fillStyle = p.floating ? 'rgba(230,230,245,0.85)' : 'rgba(235,235,245,0.92)';
+  ctx.fillRect(p.x - camera.x, p.y, p.w, H - p.y + 40);
+  ctx.strokeStyle = 'rgba(40,40,60,0.5)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(p.x - camera.x, p.y, p.w, 4);
+}
+
+function drawBossGateHint() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  const text = `擊敗 ${LEVEL_DEFS[currentLevelId].bossName} 後，回村莊的傳送門才會出現`;
+  const w = ctx.measureText(text).width + 24;
+  roundRect(ctx, W/2 - w/2, 10, w, 26, 6);
+  ctx.fill();
+  ctx.fillStyle = '#ffcf4a';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(text, W/2, 28);
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
+function drawPortal(x, groundY) {
+  ctx.save();
+  ctx.translate(x - camera.x, groundY);
+  const pulse = 0.5 + 0.5 * Math.sin(frame * 0.06);
+
+  // stone archway frame
+  ctx.fillStyle = '#4a4258';
+  roundRect(ctx, -58, -190, 24, 190, 8); ctx.fill();
+  roundRect(ctx, 34, -190, 24, 190, 8); ctx.fill();
+  roundRect(ctx, -58, -206, 116, 26, 10); ctx.fill();
+
+  // outer glow
+  ctx.fillStyle = `rgba(150,90,255,${0.22 + 0.13*pulse})`;
+  ctx.beginPath(); ctx.ellipse(-12, -100, 60, 94, 0, 0, Math.PI*2); ctx.fill();
+
+  // swirling portal disc
+  const grad = ctx.createRadialGradient(-12, -100, 4, -12, -100, 46);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.45, '#c9a2ff');
+  grad.addColorStop(1, '#5a2fae');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.ellipse(-12, -100, 42, 78, 0, 0, Math.PI*2); ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    const t = (frame * 0.03 + i / 3) % 1;
+    ctx.globalAlpha = 1 - t;
+    ctx.beginPath();
+    ctx.ellipse(-12, -100, 42 * (1 - t) + 4, 78 * (1 - t) + 4, 0, 0, Math.PI*2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const a = p.life / p.maxLife;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color || '#ffdd88';
+    ctx.beginPath();
+    ctx.arc(p.x-camera.x, p.y, p.size, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawMoon(cx, cy) {
+  const R = 150;
+  ctx.fillStyle = 'rgba(244,206,120,0.30)';
+  ctx.beginPath(); ctx.arc(cx, cy, R*1.42, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(230,150,90,0.40)';
+  ctx.beginPath(); ctx.arc(cx, cy, R*1.22, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(96,140,205,0.42)';
+  ctx.beginPath(); ctx.arc(cx, cy, R*1.06, 0, Math.PI*2); ctx.fill();
+  // flat-shaded moon body (a touch of gradient, same restrained style as the dragon's belly panel)
+  const body = ctx.createRadialGradient(cx-R*0.3, cy-R*0.3, R*0.2, cx, cy, R);
+  body.addColorStop(0, '#c97a5c');
+  body.addColorStop(1, '#a3573d');
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  const craters = [[-0.32,-0.22,0.22],[0.26,-0.12,0.15],[-0.08,0.32,0.16],[0.36,0.3,0.1],[0.02,-0.02,0.09]];
+  for (const [ox,oy,r] of craters) {
+    ctx.beginPath(); ctx.arc(cx+ox*R, cy+oy*R, r*R, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function drawFocal(kind, cx, cy) {
+  if (kind === 'volcano') {
+    const R = 150;
+    ctx.fillStyle = 'rgba(255,140,60,0.30)';
+    ctx.beginPath(); ctx.arc(cx, cy+40, R*1.3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#2a1710';
+    ctx.beginPath();
+    ctx.moveTo(cx-R*1.1, cy+R*0.9);
+    ctx.lineTo(cx-R*0.3, cy-R*0.9);
+    ctx.lineTo(cx+R*0.3, cy-R*0.9);
+    ctx.lineTo(cx+R*1.1, cy+R*0.9);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ff7a2e';
+    ctx.beginPath(); ctx.ellipse(cx, cy-R*0.85, R*0.28, R*0.12, 0, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,140,50,0.7)';
+    ctx.lineWidth = 4;
+    for (const dx of [-0.15, 0.05, 0.2]) {
+      ctx.beginPath();
+      ctx.moveTo(cx+dx*R, cy-R*0.8);
+      ctx.lineTo(cx+dx*R*1.6, cy+R*0.7);
+      ctx.stroke();
+    }
+  } else if (kind === 'bubble') {
+    const R = 160;
+    const grad = ctx.createRadialGradient(cx, cy, 10, cx, cy, R*1.4);
+    grad.addColorStop(0, 'rgba(180,230,255,0.45)');
+    grad.addColorStop(1, 'rgba(180,230,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy, R*1.4, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 6; i++) {
+      const bx = cx + Math.sin(i*1.7) * R*0.8;
+      const by = ((cy + i*60 - (frame*0.6)%360) % 400) - 200 + cy;
+      ctx.beginPath(); ctx.arc(bx, by, 5 + (i%3)*3, 0, Math.PI*2); ctx.stroke();
+    }
+  } else if (kind === 'cloud') {
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    for (const [ox,oy,r] of [[-70,10,50],[-20,-15,60],[40,0,55],[85,15,40]]) {
+      ctx.beginPath(); ctx.arc(cx+ox, cy+oy, r, 0, Math.PI*2); ctx.fill();
+    }
+  } else if (kind === 'canopy') {
+    ctx.fillStyle = 'rgba(20,60,20,0.55)';
+    for (const [ox,oy,r] of [[-80,-10,70],[-20,-40,80],[50,-15,75],[100,10,55]]) {
+      ctx.beginPath(); ctx.arc(cx+ox, cy+oy, r, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(255,240,180,0.15)';
+    ctx.beginPath(); ctx.arc(cx+20, cy-10, 30, 0, Math.PI*2); ctx.fill();
+  } else {
+    drawMoon(cx, cy);
+  }
+}
+
+function drawBackground() {
+  const theme = (LEVEL_DEFS[currentLevelId] || LEVEL_DEFS.redmoon).theme;
+
+  // sky gradient - flat vector wash, palette swapped per level theme
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, theme.sky1);
+  sky.addColorStop(0.5, theme.sky2);
+  sky.addColorStop(1, theme.sky3);
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // stars: slow parallax, gentle twinkle - only for the night-sky themes
+  if (theme.focal === 'moon') {
+    const starParX = -camera.x * 0.15;
+    for (let tile = -1; tile <= Math.ceil(W / STAR_TILE) + 1; tile++) {
+      const baseX = (((starParX % STAR_TILE) + STAR_TILE) % STAR_TILE) + tile * STAR_TILE - STAR_TILE;
+      for (const s of stars) {
+        const tw = 0.5 + 0.5 * Math.sin(frame * 0.05 + s.phase);
+        ctx.globalAlpha = 0.25 + 0.55 * tw;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(baseX + s.x, s.y, s.r, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // one big focal backdrop object per "phase" of the level, drifting slowly behind the action.
+  // World position of instance i is i*tile + offset; screen position subtracts the
+  // parallax-scaled camera so it scrolls slower than the foreground.
+  const focalTile = 3000, focalOffset = 460, focalGlow = 213;
+  const focalParX = camera.x * 0.35;
+  const iMin = Math.floor((focalParX - focalGlow - focalOffset) / focalTile);
+  const iMax = Math.ceil((focalParX + W + focalGlow - focalOffset) / focalTile);
+  for (let i = iMin; i <= iMax; i++) {
+    drawFocal(theme.focal, i * focalTile + focalOffset - focalParX, H * 0.32);
+  }
+
+  // rolling silhouette hills for a mid-ground layer, same flat-color language as the platforms
+  const hillParX = camera.x * 0.55;
+  ctx.fillStyle = theme.hill;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let x = 0; x <= W; x += 20) {
+    ctx.lineTo(x, H * 0.72 + hillHeight(x + hillParX));
+  }
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(12,8,22,0.16)';
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ---------- Main update / render ----------
+function update() {
+  if (state !== 'playing') return;
+  frame++;
+  levelTimeLeft--;
+  if (levelTimeLeft <= 0) { state = 'lose'; }
+  updatePlayer();
+  updateEnemies();
+  updateProjectiles();
+  updatePlayerProjectiles();
+  updateGroundHazards();
+  updateParticles();
+  updateArena();
+  if (worldCompleteBanner > 0) worldCompleteBanner--;
+}
+
+function render() {
+  ctx.clearRect(0,0,W,H);
+
+  if (state === 'menu') { renderMenu(); return; }
+
+  const levelDef = LEVEL_DEFS[currentLevelId];
+  drawBackground();
+
+  for (const p of platforms) drawPlatform(p);
+  if (levelDef.isVillage) {
+    drawVillageProps();
+  } else {
+    drawCoins();
+    drawGadgetDrops();
+    drawGroundHazards();
+    // the portal home doesn't appear until this level's boss is beaten, so there's
+    // no way to just run past a story boss to skip the fight
+    if (!levelDef.requiresBoss || player.bossDefeated[currentLevelId]) {
+      drawPortal(LEVEL_WIDTH - 80, GROUND_Y);
+    } else if (levelDef.requiresBoss) {
+      drawBossGateHint();
+    }
+  }
+
+  for (const en of enemies) {
+    if (en.dead && !(en.type==='bomb' && en.exploding)) continue;
+    ctx.save();
+    ctx.translate(-camera.x, 0);
+    if (en.isBoss) drawBossCreature(en);
+    else if (en.type === 'bomb') drawBombBot(en);
+    else drawDrone(en);
+    ctx.restore();
+  }
+
+  drawProjectiles();
+  drawPlayerProjectiles();
+  drawHammerThrow();
+  drawSkyAxe();
+
+  ctx.save();
+  ctx.translate(-camera.x, 0);
+  if (!player.dead) drawDragon(player);
+  if (player.rootedTimer > 0) drawRootedEffect();
+  drawParticles();
+  ctx.restore();
+
+  drawHUD();
+  drawWorldCompleteBanner();
+  drawGadgetPickupBanner();
+
+  if (state === 'lose') renderOverlay('挑戰失敗', '按 R 重新挑戰', '#e0453f');
+  if (overlay === 'weaponshop') renderWeaponShopOverlay();
+  if (overlay === 'armorshop') renderArmorShopOverlay();
+  if (overlay === 'shieldshop') renderShieldShopOverlay();
+  if (overlay === 'armorequip') renderArmorEquipShopOverlay();
+  if (overlay === 'bag') renderBagOverlay();
+  if (overlay === 'quest') renderQuestOverlay();
+}
+
+function renderOverlay(title, sub, color) {
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = color;
+  ctx.font = 'bold 48px sans-serif';
+  ctx.fillText(title, W/2, H/2 - 10);
+  ctx.fillStyle = '#fff';
+  ctx.font = '18px sans-serif';
+  ctx.fillText(sub, W/2, H/2 + 30);
+  ctx.textAlign = 'left';
+}
+
+// ---------- Village ----------
+// The village is a walkable level with no enemies. Walking up to the shop or the big
+// tree and pressing jump opens a modal (`overlay`) on top of the scene; the shop
+// reuses the same purchase system the old full-screen village screen had.
+let villageCardRects = [];
+// A visible, always-clickable close button on every overlay - a fallback for anyone
+// whose keyboard input isn't reaching the game (e.g. focus stuck outside the canvas),
+// so leaving a shop never depends on a keypress actually landing.
+const OVERLAY_CLOSE_BTN = { x: W - 44, y: 12, w: 32, h: 32 };
+function drawOverlayCloseButton() {
+  const { x, y, w, h } = OVERLAY_CLOSE_BTN;
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  roundRect(ctx, x, y, w, h, 8);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, x, y, w, h, 8);
+  ctx.stroke();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(x + 9, y + 9); ctx.lineTo(x + w - 9, y + h - 9);
+  ctx.moveTo(x + w - 9, y + 9); ctx.lineTo(x + 9, y + h - 9);
+  ctx.stroke();
+}
+function clickedOverlayCloseButton(mx, my) {
+  const { x, y, w, h } = OVERLAY_CLOSE_BTN;
+  return mx > x && mx < x + w && my > y && my < y + h;
+}
+// Auto-vivifying per-key-code state for pressedOnce(), so any overlay can use as many
+// number-key slots as it needs without a fixed-size lookup table going out of bounds.
+const villageKeyStates = {};
+function villageKeyState(code) {
+  if (!villageKeyStates[code]) villageKeyStates[code] = {};
+  return villageKeyStates[code];
+}
+const QUEST_INFO = {
+  volcano: { emoji:'🌋' },
+  ocean:   { emoji:'🌊' },
+  sky:     { emoji:'☁️' },
+  jungle:  { emoji:'🌿' }
+};
+
+function updateArmorShopOverlay() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4'];
+  ARMOR_SHOP_ITEMS.forEach((item, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) buyShopItem(item.id);
+  });
+}
+
+// Only the first 9 weapons (and the upgrade card, if it still fits) get a digit-key
+// shortcut - keyboard codes run out past Digit9, everything past that is click-only.
+const WEAPON_DIGIT_CODES = ['Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9'];
+function updateWeaponShopOverlay() {
+  PURCHASABLE_WEAPON_KEYS.forEach((key, i) => {
+    const code = WEAPON_DIGIT_CODES[i];
+    if (code && pressedOnce(code, villageKeyState(code))) selectOrBuyWeapon(key);
+  });
+  const upgradeCode = WEAPON_DIGIT_CODES[PURCHASABLE_WEAPON_KEYS.length];
+  if (upgradeCode && pressedOnce(upgradeCode, villageKeyState(upgradeCode))) buyShopItem('weapon');
+}
+
+function updateShieldShopOverlay() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4','Digit5'];
+  PURCHASABLE_SHIELD_KEYS.forEach((key, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) selectOrBuyShield(key);
+  });
+}
+
+function updateArmorEquipShopOverlay() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4','Digit5'];
+  PURCHASABLE_ARMOR_KEYS.forEach((key, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) selectOrBuyArmor(key);
+  });
+}
+
+function updateQuestOverlay() {
+  const digitCodes = ['Digit1','Digit2','Digit3','Digit4'];
+  QUEST_LEVEL_IDS.forEach((id, i) => {
+    if (pressedOnce(digitCodes[i], villageKeyState(digitCodes[i]))) enterLevel(id);
+  });
+  if (pressedOnce('Digit5', villageKeyState('Digit5'))) enterLevel('arena');
+}
+
+// Generic "level-based repeatable purchase" shop screen - used for the armor shop
+// (armor / HP flask / MP flask) and reused for the weapon-strength card in the
+// weapon shop, since both use the same shopLevels + cost-scaling system.
+// `compact` shrinks the card so it can sit under a big weapon grid without pushing
+// past the bottom of the canvas.
+function renderItemShopCards(items, y, startIndex, compact) {
+  const cw = compact ? 170 : 200, ch = compact ? 132 : 190, gap = compact ? 14 : 20;
+  const totalW = items.length * cw + (items.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+
+  items.forEach((item, i) => {
+    const x = startX + i * (cw + gap);
+    const level = player.shopLevels[item.id];
+    const maxed = level >= item.maxLevel;
+    const cost = shopItemCost(item);
+    const afford = !maxed && player.gold >= cost;
+    villageCardRects.push({x, y, w:cw, h:ch, id:item.id, kind:'item'});
+
+    ctx.fillStyle = afford ? 'rgba(76,193,90,0.16)' : 'rgba(255,255,255,0.08)';
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.fill();
+    ctx.strokeStyle = afford ? '#4CC15A' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = afford ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = compact ? 'bold 14px sans-serif' : 'bold 17px sans-serif';
+    ctx.fillText(item.name, x+cw/2, y+(compact?26:34));
+    ctx.font = compact ? '10px sans-serif' : '12px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.82)';
+    ctx.fillText(item.desc, x+cw/2, y+(compact?44:58));
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = compact ? '10px sans-serif' : '11px sans-serif';
+    ctx.fillText(`等級 ${level}/${item.maxLevel}`, x+cw/2, y+(compact?60:80));
+
+    if (maxed) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = compact ? 'bold 12px sans-serif' : 'bold 14px sans-serif';
+      ctx.fillText('已強化至上限', x+cw/2, y+ch-(compact?32:44));
+    } else {
+      ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
+      ctx.font = compact ? 'bold 13px sans-serif' : 'bold 16px sans-serif';
+      ctx.fillText(`${cost} 金幣`, x+cw/2, y+ch-(compact?32:44));
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = compact ? '9px sans-serif' : '11px sans-serif';
+    const slot = startIndex + i;
+    ctx.fillText(slot < 9 ? `按 ${slot+1} 或點擊購買` : '點擊購買', x+cw/2, y+ch-(compact?14:20));
+  });
+}
+
+function renderArmorShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('防具商店', W/2, 56);
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 84);
+
+  villageCardRects = [];
+  renderItemShopCards(ARMOR_SHOP_ITEMS, 110, 0);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-24);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
+// Wraps onto a second line at the first comma if the text is too wide for its card -
+// good enough for the shield descriptions, which are all one or two comma-joined clauses.
+function wrapFillText(text, x, y, maxWidth, lineHeight) {
+  if (ctx.measureText(text).width <= maxWidth) {
+    ctx.fillText(text, x, y);
+    return;
+  }
+  const commaIdx = text.indexOf('，');
+  const splitAt = (commaIdx > 0 && commaIdx < text.length - 1) ? commaIdx + 1 : Math.ceil(text.length / 2);
+  ctx.fillText(text.slice(0, splitAt), x, y);
+  ctx.fillText(text.slice(splitAt), x, y + lineHeight);
+}
+
+function drawShieldIcon(key) {
+  ctx.save();
+  if (key === 'greatshield') {
+    roundRect(ctx, -20, -40, 40, 80, 12);
+    ctx.fillStyle = '#5a5f68';
+    ctx.fill();
+    roundRect(ctx, -12, -30, 24, 60, 8);
+    ctx.fillStyle = '#8f97a3';
+    ctx.fill();
+    ctx.fillStyle = '#e8d55a';
+    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fill();
+  } else if (key === 'spikeshield') {
+    roundRect(ctx, -14, -34, 28, 68, 10);
+    ctx.fillStyle = '#7a4a3a';
+    ctx.fill();
+    roundRect(ctx, -8, -26, 16, 52, 6);
+    ctx.fillStyle = '#c9a24a';
+    ctx.fill();
+    ctx.fillStyle = '#e8e8ee';
+    for (const oy of [-22, 0, 22]) {
+      ctx.beginPath();
+      ctx.moveTo(-6, oy-6); ctx.lineTo(-20, oy); ctx.lineTo(-6, oy+6);
+      ctx.fill();
+    }
+  } else if (key === 'buckler') {
+    ctx.beginPath(); ctx.arc(0, 0, 22, 0, Math.PI*2);
+    ctx.fillStyle = '#c9a24a';
+    ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI*2);
+    ctx.fillStyle = '#e8d9a0';
+    ctx.fill();
+    ctx.fillStyle = '#8a6a3a';
+    ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI*2); ctx.fill();
+  } else if (key === 'manashield') {
+    roundRect(ctx, -14, -32, 28, 64, 10);
+    ctx.fillStyle = '#2a3a6a';
+    ctx.fill();
+    roundRect(ctx, -8, -24, 16, 48, 6);
+    ctx.fillStyle = '#5c9dff';
+    ctx.fill();
+    ctx.fillStyle = '#dff0ff';
+    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fill();
+  } else {
+    roundRect(ctx, -13, -32, 26, 64, 10);
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fill();
+    roundRect(ctx, -7, -24, 14, 48, 6);
+    ctx.fillStyle = '#c9d6e3';
+    ctx.fill();
+    ctx.fillStyle = '#e8d55a';
+    ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function renderShieldShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('盾牌商店', W/2, 56);
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 84);
+
+  villageCardRects = [];
+  const cw = 168, ch = 195, gap = 16;
+  const totalW = PURCHASABLE_SHIELD_KEYS.length * cw + (PURCHASABLE_SHIELD_KEYS.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+  const y = 110;
+
+  PURCHASABLE_SHIELD_KEYS.forEach((key, i) => {
+    const s = SHIELDS[key];
+    const owned = player.unlockedShields.has(key);
+    const equipped = player.shield.key === key;
+    const afford = !owned && player.gold >= (s.price || 0);
+    const x = startX + i * (cw + gap);
+    villageCardRects.push({x, y, w:cw, h:ch, id:key});
+
+    ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : (owned || afford) ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.05)';
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.fill();
+    ctx.strokeStyle = equipped ? '#4CC15A' : (owned ? 'rgba(255,255,255,0.4)' : (afford ? '#f5c542' : 'rgba(255,255,255,0.25)'));
+    ctx.lineWidth = equipped ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x+cw/2, y+66);
+    ctx.scale(0.68, 0.68);
+    drawShieldIcon(key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(s.name, x+cw/2, y+116);
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+    wrapFillText(s.desc, x+cw/2, y+134, cw-20, 13);
+
+    if (equipped) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText('裝備中', x+cw/2, y+ch-26);
+    } else if (owned) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('已擁有', x+cw/2, y+ch-26);
+    } else {
+      ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(`${s.price} 金幣`, x+cw/2, y+ch-26);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊${owned ? '裝備' : '購買'}`, x+cw/2, y+ch-10);
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-24);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
+function drawArmorIcon(key) {
+  ctx.save();
+  if (key === 'leather') {
+    roundRect(ctx, -16, -34, 32, 66, 10);
+    ctx.fillStyle = '#8a6a44';
+    ctx.fill();
+    roundRect(ctx, -10, -26, 20, 50, 6);
+    ctx.fillStyle = '#c9a876';
+    ctx.fill();
+  } else if (key === 'spike') {
+    roundRect(ctx, -16, -34, 32, 66, 10);
+    ctx.fillStyle = '#5a4a4a';
+    ctx.fill();
+    ctx.fillStyle = '#e8e8ee';
+    for (const oy of [-22, -4, 14, 32]) {
+      ctx.beginPath();
+      ctx.moveTo(-6, oy); ctx.lineTo(0, oy-10); ctx.lineTo(6, oy);
+      ctx.fill();
+    }
+  } else if (key === 'chain') {
+    roundRect(ctx, -17, -34, 34, 66, 10);
+    ctx.fillStyle = '#5c6672';
+    ctx.fill();
+    ctx.strokeStyle = '#8f97a3';
+    ctx.lineWidth = 1.5;
+    for (let row = -24; row < 28; row += 10) {
+      for (let col = -10; col < 14; col += 12) {
+        ctx.beginPath(); ctx.arc(col, row, 4, 0, Math.PI*2); ctx.stroke();
+      }
+    }
+  } else if (key === 'diamond') {
+    roundRect(ctx, -17, -34, 34, 66, 10);
+    ctx.fillStyle = '#2a4a5a';
+    ctx.fill();
+    ctx.fillStyle = '#7fe0ff';
+    ctx.beginPath();
+    ctx.moveTo(0, -22); ctx.lineTo(14, -4); ctx.lineTo(0, 14); ctx.lineTo(-14, -4);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#e0fbff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  } else {
+    roundRect(ctx, -14, -30, 28, 58, 10);
+    ctx.fillStyle = '#4a4a52';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, -14, -30, 28, 58, 10);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function renderArmorEquipShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('盔甲商店', W/2, 56);
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 84);
+
+  villageCardRects = [];
+  const cw = 168, ch = 195, gap = 16;
+  const totalW = PURCHASABLE_ARMOR_KEYS.length * cw + (PURCHASABLE_ARMOR_KEYS.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+  const y = 110;
+
+  PURCHASABLE_ARMOR_KEYS.forEach((key, i) => {
+    const a = ARMORS[key];
+    const owned = player.unlockedArmors.has(key);
+    const equipped = player.armor.key === key;
+    const afford = !owned && player.gold >= (a.price || 0);
+    const x = startX + i * (cw + gap);
+    villageCardRects.push({x, y, w:cw, h:ch, id:key});
+
+    ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : (owned || afford) ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.05)';
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.fill();
+    ctx.strokeStyle = equipped ? '#4CC15A' : (owned ? 'rgba(255,255,255,0.4)' : (afford ? '#f5c542' : 'rgba(255,255,255,0.25)'));
+    ctx.lineWidth = equipped ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x+cw/2, y+66);
+    ctx.scale(0.68, 0.68);
+    drawArmorIcon(key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(a.name, x+cw/2, y+116);
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+    wrapFillText(a.desc, x+cw/2, y+134, cw-20, 13);
+
+    if (equipped) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText('裝備中', x+cw/2, y+ch-26);
+    } else if (owned) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('已擁有', x+cw/2, y+ch-26);
+    } else {
+      ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(`${a.price} 金幣`, x+cw/2, y+ch-26);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊${owned ? '裝備' : '購買'}`, x+cw/2, y+ch-10);
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-24);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
+function renderWeaponShopOverlay() {
+  ctx.fillStyle = 'rgba(20,10,30,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.fillText('武器商店', W/2, 34);
+  ctx.font = 'bold 15px sans-serif';
+  ctx.fillStyle = '#f5c542';
+  ctx.fillText(`金幣：${player.gold}`, W/2, 56);
+
+  villageCardRects = [];
+  // Wraps into rows once there are more weapons than fit across in one line, rather
+  // than shrinking every card unreadably small as the roster keeps growing.
+  const cw = 118, ch = 108, gap = 8, maxPerRow = 6;
+  const total = PURCHASABLE_WEAPON_KEYS.length;
+  const rowsCount = Math.ceil(total / maxPerRow);
+  const rowPitch = ch + gap + 4;
+  const topY = 60;
+
+  PURCHASABLE_WEAPON_KEYS.forEach((key, i) => {
+    const row = Math.floor(i / maxPerRow);
+    const col = i % maxPerRow;
+    const itemsInRow = Math.min(maxPerRow, total - row * maxPerRow);
+    const rowW = itemsInRow * cw + (itemsInRow - 1) * gap;
+    const startX = W/2 - rowW/2;
+    const x = startX + col * (cw + gap);
+    const y = topY + row * rowPitch;
+
+    const w = WEAPONS[key];
+    const owned = player.unlockedWeapons.has(key);
+    const equipped = player.weapon.key === key;
+    const afford = !owned && player.gold >= (w.price || 0);
+    villageCardRects.push({x, y, w:cw, h:ch, id:key, kind:'weapon'});
+
+    ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : (owned || afford) ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.05)';
+    roundRect(ctx, x, y, cw, ch, 10);
+    ctx.fill();
+    ctx.strokeStyle = equipped ? '#4CC15A' : (owned ? 'rgba(255,255,255,0.4)' : (afford ? '#f5c542' : 'rgba(255,255,255,0.25)'));
+    ctx.lineWidth = equipped ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 10);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x+cw/2, y+34);
+    ctx.scale(0.56, 0.56);
+    drawWeaponIcon(key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(w.name, x+cw/2, y+60);
+    ctx.font = '8px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText(w.desc, x+cw/2, y+72);
+
+    if (equipped) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('裝備中', x+cw/2, y+ch-20);
+    } else if (owned) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = '9px sans-serif';
+      ctx.fillText('已擁有', x+cw/2, y+ch-20);
+    } else {
+      ctx.fillStyle = afford ? '#f5c542' : 'rgba(255,255,255,0.4)';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillText(`${w.price} 金幣`, x+cw/2, y+ch-20);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '8px sans-serif';
+    const hint = i < 9 ? `按 ${i+1} 或點擊${owned ? '裝備' : '購買'}` : `點擊${owned ? '裝備' : '購買'}`;
+    ctx.fillText(hint, x+cw/2, y+ch-7);
+  });
+
+  const lastRowY = topY + (rowsCount - 1) * rowPitch;
+  renderItemShopCards(WEAPON_SHOP_UPGRADE_ITEMS, lastRowY + ch + 18, total, true);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '12px sans-serif';
+  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開商店', W/2, H-12);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
+// The bag: a free, no-purchase quick-swap between already-owned weapons and gadgets -
+// usable anywhere (opened with K), not just in the village like the shops above.
+function renderBagOverlay() {
+  ctx.fillStyle = 'rgba(10,10,20,0.75)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.fillText('包包', W/2, 32);
+
+  villageCardRects = [];
+  const ownedWeapons = PURCHASABLE_WEAPON_KEYS.filter(k => player.unlockedWeapons.has(k));
+  const ownedGadgets = Array.from(player.unlockedGadgets);
+
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText('武器', W/2, 56);
+
+  const cw = 100, ch = 92, gap = 8, maxPerRow = 7;
+  const rowPitch = ch + gap + 4;
+  let topY = 64;
+  ownedWeapons.forEach((key, i) => {
+    const row = Math.floor(i / maxPerRow);
+    const col = i % maxPerRow;
+    const itemsInRow = Math.min(maxPerRow, ownedWeapons.length - row * maxPerRow);
+    const rowW = itemsInRow * cw + (itemsInRow - 1) * gap;
+    const startX = W/2 - rowW/2;
+    const x = startX + col * (cw + gap);
+    const y = topY + row * rowPitch;
+
+    const w = WEAPONS[key];
+    const equipped = player.weapon.key === key;
+    villageCardRects.push({x, y, w:cw, h:ch, id:key, kind:'weapon'});
+
+    ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : 'rgba(255,255,255,0.09)';
+    roundRect(ctx, x, y, cw, ch, 10);
+    ctx.fill();
+    ctx.strokeStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = equipped ? 2.5 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 10);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(x+cw/2, y+30);
+    ctx.scale(0.5, 0.5);
+    drawWeaponIcon(key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText(w.name, x+cw/2, y+54);
+    ctx.fillStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.6)';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText(equipped ? '裝備中' : '點擊裝備', x+cw/2, y+ch-10);
+  });
+
+  const weaponRows = Math.ceil(ownedWeapons.length / maxPerRow) || 1;
+  let gadgetTopY = topY + weaponRows * rowPitch + 24;
+
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText('專屬裝備 (按 I 使用)', W/2, gadgetTopY - 8);
+  gadgetTopY += 8;
+
+  if (ownedGadgets.length === 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('尚未取得任何專屬裝備 - 擊敗怪物有機會掉落', W/2, gadgetTopY + 30);
+  } else {
+    const gcw = 130, gch = 100, ggap = 10;
+    const totalW = ownedGadgets.length * gcw + (ownedGadgets.length - 1) * ggap;
+    const startX = W/2 - totalW/2;
+    ownedGadgets.forEach((key, i) => {
+      const g = GADGETS[key];
+      const equipped = player.equippedGadget === key;
+      const x = startX + i * (gcw + ggap);
+      const y = gadgetTopY;
+      villageCardRects.push({x, y, w:gcw, h:gch, id:key, kind:'gadget'});
+
+      ctx.fillStyle = equipped ? 'rgba(76,193,90,0.22)' : 'rgba(255,255,255,0.09)';
+      roundRect(ctx, x, y, gcw, gch, 10);
+      ctx.fill();
+      ctx.strokeStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = equipped ? 2.5 : 1.5;
+      roundRect(ctx, x, y, gcw, gch, 10);
+      ctx.stroke();
+
+      ctx.save();
+      ctx.translate(x+gcw/2, y+30);
+      ctx.fillStyle = g.color;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -14); ctx.lineTo(14, 0); ctx.lineTo(0, 14); ctx.lineTo(-14, 0);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.restore();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(g.name, x+gcw/2, y+58);
+      ctx.font = '9px sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      wrapFillText(g.desc, x+gcw/2, y+72, gcw-14, 11);
+      ctx.fillStyle = equipped ? '#4CC15A' : 'rgba(255,255,255,0.6)';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(equipped ? '裝備中' : '點擊裝備', x+gcw/2, y+gch-8);
+    });
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('按 K／J／L／跳躍鍵，或點右上角 ✕ 關閉包包', W/2, H-16);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
+function renderQuestOverlay() {
+  ctx.fillStyle = 'rgba(10,20,10,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('大樹的任務', W/2, 56);
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText('接下任務，前往關卡冒險吧', W/2, 80);
+
+  villageCardRects = [];
+  const cw = 200, ch = 190, gap = 20;
+  const totalW = QUEST_LEVEL_IDS.length * cw + (QUEST_LEVEL_IDS.length - 1) * gap;
+  const startX = W/2 - totalW/2;
+  const y = 105;
+
+  QUEST_LEVEL_IDS.forEach((id, i) => {
+    const def = LEVEL_DEFS[id];
+    const defeated = player.bossDefeated[id];
+    const x = startX + i * (cw + gap);
+    villageCardRects.push({x, y, w:cw, h:ch, id});
+
+    ctx.fillStyle = defeated ? 'rgba(76,193,90,0.14)' : 'rgba(255,255,255,0.08)';
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.fill();
+    ctx.strokeStyle = '#4CC15A';
+    ctx.lineWidth = 2;
+    roundRect(ctx, x, y, cw, ch, 12);
+    ctx.stroke();
+
+    ctx.font = '28px sans-serif';
+    ctx.fillText(QUEST_INFO[id].emoji, x+cw/2, y+42);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(def.name, x+cw/2, y+66);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillText('敵人：' + def.grunts.join('、'), x+cw/2, y+90);
+    ctx.fillStyle = defeated ? '#4CC15A' : '#ff8a6a';
+    ctx.fillText((defeated ? '✅ 已擊敗 ' : 'BOSS：') + def.bossName, x+cw/2, y+108);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(`按 ${i+1} 或點擊接受`, x+cw/2, y+ch-20);
+  });
+
+  // A separate, visually distinct banner for the endless side mode - not a story
+  // quest, so it doesn't share the green card styling of the four above.
+  const bannerY = y + ch + 22, bannerH = 84, bannerW = totalW;
+  const bx = W/2 - bannerW/2;
+  villageCardRects.push({x:bx, y:bannerY, w:bannerW, h:bannerH, id:'arena'});
+  ctx.fillStyle = 'rgba(180,40,40,0.18)';
+  roundRect(ctx, bx, bannerY, bannerW, bannerH, 12);
+  ctx.fill();
+  ctx.strokeStyle = '#e0453f';
+  ctx.lineWidth = 2;
+  roundRect(ctx, bx, bannerY, bannerW, bannerH, 12);
+  ctx.stroke();
+  ctx.font = '30px sans-serif';
+  ctx.fillText('♾️', bx+50, bannerY+50);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillText('無限死鬥（非主線小遊戲）', bx+90, bannerY+32);
+  ctx.font = '11px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText('四大關卡小怪一波波湧來，第 5、10、15...波會出現隨機一位大魔王，可隨時走到傳送門離開', bx+90, bannerY+52);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillText('按 5 或點擊挑戰', bx+90, bannerY+70);
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('按 J／L／跳躍鍵，或點右上角 ✕ 離開', W/2, H-14);
+  ctx.textAlign = 'left';
+  drawOverlayCloseButton();
+}
+
+function drawShopBuilding(x, label, roofColor, bodyColor, icon) {
+  ctx.save();
+  ctx.translate(x - camera.x, GROUND_Y);
+  ctx.fillStyle = bodyColor;
+  roundRect(ctx, -54, -118, 108, 118, 6); ctx.fill();
+  ctx.fillStyle = roofColor;
+  ctx.beginPath(); ctx.moveTo(-66,-118); ctx.lineTo(0,-162); ctx.lineTo(66,-118); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#3a2418';
+  roundRect(ctx, -17, -50, 34, 50, 4); ctx.fill();
+  ctx.fillStyle = '#f5c542';
+  roundRect(ctx, -44, -90, 26, 26, 3); ctx.fill();
+  roundRect(ctx, 18, -90, 26, 26, 3); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(icon, 0, -138);
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillText(label, 0, -172);
+  ctx.restore();
+  ctx.textAlign = 'left';
+}
+
+function drawVillageProps() {
+  drawShopBuilding(VILLAGE_WEAPON_SHOP_X, '武器商店', '#7a4a3a', '#5a3f30', '⚔️');
+  drawShopBuilding(VILLAGE_ARMOR_SHOP_X, '防具商店', '#3a5a7a', '#30475a', '🛡️');
+  drawShopBuilding(VILLAGE_SHIELD_SHOP_X, '盾牌商店', '#5a4a2a', '#4a3a20', '🔰');
+  drawShopBuilding(VILLAGE_ARMOR_EQUIP_SHOP_X, '盔甲商店', '#4a3a5a', '#382a45', '🥋');
+
+  // big tree
+  ctx.save();
+  ctx.translate(VILLAGE_TREE_X - camera.x, GROUND_Y);
+  ctx.fillStyle = '#5a3c28';
+  roundRect(ctx, -14, -90, 28, 90, 6); ctx.fill();
+  ctx.fillStyle = '#2f6b34';
+  for (const [ox,oy,r] of [[-40,-130,50],[10,-155,60],[55,-120,45],[0,-95,55]]) {
+    ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.fillStyle = '#f5c542';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('!', 0, -175);
+  ctx.restore();
+  ctx.textAlign = 'left';
+
+  // proximity hints - skip while a modal is already open, so the hint text doesn't bleed through the dark tint
+  if (overlay) return;
+  const px = player.x + player.w/2;
+  if (Math.abs(px - VILLAGE_WEAPON_SHOP_X) < 70) drawInteractHint(VILLAGE_WEAPON_SHOP_X, GROUND_Y-180, '按跳躍鍵進入武器商店');
+  if (Math.abs(px - VILLAGE_ARMOR_SHOP_X) < 70) drawInteractHint(VILLAGE_ARMOR_SHOP_X, GROUND_Y-180, '按跳躍鍵進入防具商店');
+  if (Math.abs(px - VILLAGE_SHIELD_SHOP_X) < 70) drawInteractHint(VILLAGE_SHIELD_SHOP_X, GROUND_Y-180, '按跳躍鍵進入盾牌商店');
+  if (Math.abs(px - VILLAGE_ARMOR_EQUIP_SHOP_X) < 70) drawInteractHint(VILLAGE_ARMOR_EQUIP_SHOP_X, GROUND_Y-180, '按跳躍鍵進入盔甲商店');
+  if (Math.abs(px - VILLAGE_TREE_X) < 70) drawInteractHint(VILLAGE_TREE_X, GROUND_Y-200, '按跳躍鍵接取任務');
+}
+
+function drawInteractHint(x, y, text) {
+  ctx.save();
+  ctx.translate(x - camera.x, y);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  const w = ctx.measureText(text).width + 20;
+  roundRect(ctx, -w/2, -22, w, 26, 6);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(text, 0, -4);
+  ctx.restore();
+}
+
+function renderMenu() {
+  drawBackground();
+  ctx.fillStyle = 'rgba(5,5,15,0.55)';
+  ctx.fillRect(0,0,W,H);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 40px sans-serif';
+  ctx.fillText('小龍勇士', W/2, 90);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillText('選擇你的武器　－　第一關：紅月遺跡', W/2, 125);
+
+  weaponOrder.forEach((key, i) => {
+    const w = WEAPONS[key];
+    const x = 90 + i*280, y = 210, cw = 240, ch = 300;
+    const selected = i === menuSelectIndex;
+
+    ctx.fillStyle = selected ? 'rgba(76,193,90,0.25)' : 'rgba(255,255,255,0.08)';
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.fill();
+    ctx.strokeStyle = selected ? '#4CC15A' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = selected ? 3 : 1.5;
+    roundRect(ctx, x, y, cw, ch, 14);
+    ctx.stroke();
+
+    // weapon icon
+    ctx.save();
+    ctx.translate(x+cw/2, y+80);
+    drawWeaponIcon(w.key);
+    ctx.restore();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText(w.name, x+cw/2, y+150);
+    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(w.desc, x+cw/2, y+172);
+
+    // rating bars
+    drawRating(x+40, y+200, '速度', w.speedRating, 3, '#4fd15b');
+    drawRating(x+40, y+230, '傷害', w.dmgRating, 3, '#e0453f');
+
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = 'rgba(160,200,255,0.85)';
+    ctx.fillText(`長按攻擊鍵＝${w.specialName}（耗${w.specialCost} FP）`, x+cw/2, y+254);
+
+    if (selected) {
+      ctx.fillStyle = '#4CC15A';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.fillText('▶ 已選擇 ◀', x+cw/2, y+270);
+    }
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('← → 選擇　　空白鍵 / Enter 確認出發', W/2, H-40);
+  ctx.textAlign = 'left';
+}
+
+function drawRating(x, y, label, value, max, color) {
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(label, x, y+9);
+  for (let i=0;i<max;i++) {
+    ctx.fillStyle = i < value ? color : 'rgba(255,255,255,0.2)';
+    ctx.fillRect(x+36+i*16, y, 12, 12);
+  }
+}
+
+function drawWeaponIcon(key) {
+  ctx.save();
+  ctx.rotate(-0.5);
+  if (key === 'sword') {
+    ctx.fillStyle = '#c9d6e3';
+    ctx.fillRect(-4, -50, 8, 70);
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-14, 18, 28, 10);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-5, 26, 10, 16);
+  } else if (key === 'hammer') {
+    ctx.fillStyle = '#7a5a3a';
+    ctx.fillRect(-4, -20, 8, 70);
+    ctx.fillStyle = '#6b6f76';
+    ctx.fillRect(-26, -50, 52, 36);
+    ctx.strokeStyle = '#3a3a3a';
+    ctx.strokeRect(-26,-50,52,36);
+  } else if (key === 'spear') {
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-4, -30, 8, 90);
+    ctx.fillStyle = '#c9d6e3';
+    ctx.beginPath();
+    ctx.moveTo(-14,-30); ctx.lineTo(0,-64); ctx.lineTo(14,-30);
+    ctx.fill();
+  } else if (key === 'dualdagger') {
+    ctx.save();
+    ctx.rotate(0.9);
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(-3, -46, 6, 50);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 2, 12, 8);
+    ctx.restore();
+    ctx.save();
+    ctx.rotate(-0.9);
+    ctx.fillStyle = '#d94f6a';
+    ctx.fillRect(-3, -46, 6, 50);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 2, 12, 8);
+    ctx.restore();
+  } else if (key === 'greataxe') {
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-4, -18, 8, 82);
+    ctx.fillStyle = '#5a6b7a';
+    ctx.beginPath();
+    ctx.moveTo(-4, -50); ctx.quadraticCurveTo(-40, -46, -34, -14);
+    ctx.quadraticCurveTo(-16, -22, -4, -14);
+    ctx.quadraticCurveTo(8, -22, 26, -14);
+    ctx.quadraticCurveTo(32, -46, -4, -50);
+    ctx.fill();
+    ctx.strokeStyle = '#3a3a3a';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  } else if (key === 'whip') {
+    ctx.strokeStyle = '#8a4fd9';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, 30);
+    ctx.quadraticCurveTo(-4, 0, -22, -20);
+    ctx.quadraticCurveTo(-30, -32, -20, -42);
+    ctx.stroke();
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 24, 12, 14);
+  } else if (key === 'greatsword') {
+    ctx.fillStyle = '#c9a24a';
+    ctx.fillRect(-6, -56, 12, 74);
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-18, 16, 36, 12);
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-6, 26, 12, 18);
+  } else if (key === 'trident') {
+    ctx.fillStyle = '#8a6a3a';
+    ctx.fillRect(-4, -20, 8, 80);
+    ctx.fillStyle = '#4fb8c9';
+    for (const ox of [-16, 0, 16]) {
+      ctx.beginPath();
+      ctx.moveTo(ox-3, -20); ctx.lineTo(ox+3, -20); ctx.lineTo(ox, -50);
+      ctx.fill();
+    }
+  } else if (key === 'katana') {
+    ctx.fillStyle = '#e8e8ee';
+    ctx.beginPath();
+    ctx.moveTo(-6, 30); ctx.quadraticCurveTo(2, -10, -6, -52);
+    ctx.lineTo(0, -52); ctx.quadraticCurveTo(8, -10, 0, 30);
+    ctx.fill();
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(-9, 28, 18, 16);
+  } else if (key === 'shortblade') {
+    ctx.fillStyle = '#a9a9a9';
+    ctx.beginPath();
+    ctx.moveTo(-6, 16); ctx.lineTo(6, 16); ctx.lineTo(0, -30);
+    ctx.fill();
+    ctx.fillStyle = '#5a4632';
+    ctx.fillRect(-7, 16, 14, 14);
+  } else if (key === 'bow') {
+    ctx.strokeStyle = '#8a6a3a';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 34, -1.2, 1.2);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(34*Math.cos(-1.2), 34*Math.sin(-1.2));
+    ctx.lineTo(-4, 0);
+    ctx.lineTo(34*Math.cos(1.2), 34*Math.sin(1.2));
+    ctx.stroke();
+  } else if (key === 'flail') {
+    ctx.strokeStyle = '#8a6a3a';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(0, 30); ctx.lineTo(0, -6);
+    ctx.stroke();
+    ctx.strokeStyle = '#6a5a4a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -6); ctx.lineTo(-6, -22); ctx.lineTo(6, -34); ctx.lineTo(0, -48);
+    ctx.stroke();
+    ctx.fillStyle = '#5a5f68';
+    ctx.beginPath(); ctx.arc(0, -50, 12, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#3a3a3a';
+    for (let i = 0; i < 6; i++) {
+      const ang = i * Math.PI / 3;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(ang)*12, -50+Math.sin(ang)*12);
+      ctx.lineTo(Math.cos(ang)*18, -50+Math.sin(ang)*18);
+      ctx.stroke();
+    }
+  } else if (key === 'scythe') {
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(-4, -30, 8, 90);
+    ctx.fillStyle = '#8a1a2a';
+    ctx.beginPath();
+    ctx.moveTo(0, -30);
+    ctx.quadraticCurveTo(-50, -40, -46, 0);
+    ctx.quadraticCurveTo(-30, -6, 0, -14);
+    ctx.fill();
+    ctx.strokeStyle = '#c9a24a';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyR' && state === 'lose') {
+    state = 'menu';
+  }
+  if ((e.code === 'KeyL' || e.code === 'Escape' || e.code === 'KeyJ' || e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') && overlay) {
+    overlay = null;
+  }
+  // the bag is a quick weapon/gadget swap usable anywhere, not just in the village -
+  // K opens it from no overlay, and (like every other overlay) closes it again
+  if (e.code === 'KeyK') {
+    if (overlay === 'bag') overlay = null;
+    else if (!overlay && state === 'playing') overlay = 'bag';
+  }
+});
+
+function loop() {
+  // A single bad frame must never permanently freeze the game: requestAnimationFrame
+  // only reschedules itself if reached, so any thrown error here has to be caught
+  // rather than silently stopping every future frame.
+  try {
+    if (state === 'menu') updateMenu();
+    else if (overlay === 'weaponshop') updateWeaponShopOverlay();
+    else if (overlay === 'armorshop') updateArmorShopOverlay();
+    else if (overlay === 'shieldshop') updateShieldShopOverlay();
+    else if (overlay === 'armorequip') updateArmorEquipShopOverlay();
+    else if (overlay === 'quest') updateQuestOverlay();
+    update();
+    render();
+  } catch (err) {
+    console.error('game loop error:', err);
+  }
+  requestAnimationFrame(loop);
+}
+loop();
+
+})();
+</script>
+</body>
+</html>
